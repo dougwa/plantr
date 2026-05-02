@@ -1,31 +1,38 @@
 import { StatusBar } from "expo-status-bar";
-import { StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { AuthProvider, useAuth } from "./src/contexts/AuthContext";
+import LoginScreen from "./src/screens/LoginScreen";
+import ChangePasswordScreen from "./src/screens/ChangePasswordScreen";
+import HomeScreen from "./src/screens/HomeScreen";
+
+function Router() {
+  const { state } = useAuth();
+  if (state.status === "loading") {
+    return (
+      <View style={styles.loading}>
+        <ActivityIndicator size="large" />
+      </View>
+    );
+  }
+  if (state.status === "anon") return <LoginScreen />;
+  if (state.user.mustChangePass) return <ChangePasswordScreen />;
+  return <HomeScreen />;
+}
 
 export default function App() {
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>PlantR</Text>
-      <Text style={styles.subtitle}>Mobile app scaffold ready.</Text>
+    <AuthProvider>
+      <Router />
       <StatusBar style="auto" />
-    </View>
+    </AuthProvider>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  loading: {
     flex: 1,
     backgroundColor: "#fafafa",
     alignItems: "center",
     justifyContent: "center",
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: "600",
-    color: "#171717",
-  },
-  subtitle: {
-    marginTop: 8,
-    fontSize: 16,
-    color: "#525252",
   },
 });

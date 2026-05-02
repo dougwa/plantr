@@ -3,10 +3,17 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
   outputFileTracingRoot: path.join(__dirname, "../.."),
+  async rewrites() {
+    return [
+      { source: "/api/:path*", destination: `${apiUrl}/:path*` },
+    ];
+  },
 };
 
 export default nextConfig;
