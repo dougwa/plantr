@@ -8,11 +8,42 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.kauseway.plantr"
+      "bundleIdentifier": "com.kauseway.plantr",
+      "infoPlist": {
+        "NSCameraUsageDescription": "PlantR uses the camera to scan plant QR codes and to take plant photos.",
+        "NSLocationWhenInUseUsageDescription": "PlantR records the GPS location of each scan so plants can be shown on the property map.",
+        "NSPhotoLibraryUsageDescription": "PlantR can pull plant photos from your library."
+      }
     },
     "android": {
-      "package": "com.kauseway.plantr"
+      "package": "com.kauseway.plantr",
+      "permissions": [
+        "CAMERA",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "READ_EXTERNAL_STORAGE"
+      ]
     },
-    "platforms": ["ios", "android"]
+    "platforms": ["ios", "android"],
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "PlantR uses the camera to scan QR codes and take plant photos."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "PlantR can pull plant photos from your library."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "PlantR records the GPS location of each scan."
+        }
+      ]
+    ]
   }
 }

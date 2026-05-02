@@ -7,14 +7,25 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum ActionKind {
+  feeding
+  watering
+  fertilizing
+  treating
+}
+
 model User {
-  id             String    @id @default(cuid())
-  username       String    @unique
+  id             String          @id @default(cuid())
+  username       String          @unique
   passwordHash   String
-  mustChangePass Boolean   @default(false)
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  mustChangePass Boolean         @default(false)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
   sessions       Session[]
+  plants         Plant[]
+  photos         Photo[]
+  actions        Action[]
+  locationShapes LocationShape[]
 }
 
 model Session {
@@ -27,4 +38,85 @@ model Session {
   lastUsedAt DateTime @default(now())
 
   @@index([userId])
+}
+
+model PlantType {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+  plants    Plant[]
+}
+
+model Plant {
+  id              String         @id @default(cuid())
+  qrCode          String         @unique
+  name            String?
+  typeId          String?
+  type            PlantType?     @relation(fields: [typeId], references: [id], onDelete: SetNull)
+  species         String?
+  description     String?
+  notes           String?
+  coverPhotoId    String?        @unique
+  coverPhoto      Photo?         @relation("PlantCover", fields: [coverPhotoId], references: [id], onDelete: SetNull)
+  gpsLat          Float?
+  gpsLng          Float?
+  plantNetData    Json?
+  locationShapeId String?
+  locationShape   LocationShape? @relation(fields: [locationShapeId], references: [id], onDelete: SetNull)
+  createdById     String
+  createdBy       User           @relation(fields: [createdById], references: [id])
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  photos          Photo[]        @relation("PlantPhotos")
+  actions         Action[]
+
+  @@index([typeId])
+  @@index([locationShapeId])
+}
+
+model Photo {
+  id            String   @id @default(cuid())
+  plantId       String
+  plant         Plant    @relation("PlantPhotos", fields: [plantId], references: [id], onDelete: Cascade)
+  originalPath  String
+  thumbnailPath String
+  coverPath     String
+  createdById   String
+  createdBy     User     @relation(fields: [createdById], references: [id])
+  createdAt     DateTime @default(now())
+  coverOf       Plant?   @relation("PlantCover")
+
+  @@index([plantId])
+}
+
+model Action {
+  id          String     @id @default(cuid())
+  plantId     String
+  plant       Plant      @relation(fields: [plantId], references: [id], onDelete: Cascade)
+  kind        ActionKind
+  notes       String?
+  takenAt     DateTime
+  createdById String
+  createdBy   User       @relation(fields: [createdById], references: [id])
+  createdAt   DateTime   @default(now())
+
+  @@index([plantId, takenAt])
+}
+
+model LocationShape {
+  id              String   @id @default(cuid())
+  name            String?
+  kind            String
+  color           String
+  centerLat       Float
+  centerLng       Float
+  widthMeters     Float
+  heightMeters    Float
+  rotationDegrees Float    @default(0)
+  locked          Boolean  @default(false)
+  createdById     String
+  createdBy       User     @relation(fields: [createdById], references: [id])
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  plants          Plant[]
 }

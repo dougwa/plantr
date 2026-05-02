@@ -21,14 +21,14 @@ type AuthState =
   | { status: "anon" }
   | { status: "authed"; token: string; user: AuthUser };
 
+type Result = { ok: true } | { ok: false; error: string };
+
 type AuthContextValue = {
   state: AuthState;
-  signIn: (username: string, password: string) => Promise<{ ok: boolean; error?: string }>;
+  signIn: (username: string, password: string) => Promise<Result>;
   signOut: () => Promise<void>;
-  changePassword: (
-    currentPassword: string,
-    newPassword: string,
-  ) => Promise<{ ok: boolean; error?: string }>;
+  changePassword: (currentPassword: string, newPassword: string) => Promise<Result>;
+  refreshUser: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -53,24 +53,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })();
   }, []);
 
-  const signIn = useCallback(async (username: string, password: string) => {
+  const signIn = useCallback(async (username: string, password: string): Promise<Result> => {
     const result = await apiLogin(username, password);
     if (!result.ok) return { ok: false, error: result.error };
-    await saveToken(result.token);
-    setState({ status: "authed", token: result.token, user: result.user });
+    await saveToken(result.data.token);
+    setState({ status: "authed", token: result.data.token, user: result.data.user });
     return { ok: true };
   }, []);
 
   const signOut = useCallback(async () => {
-    if (state.status === "authed") {
-      await apiLogout(state.token);
-    }
+    if (state.status === "authed") await apiLogout(state.token);
     await clearToken();
     setState({ status: "anon" });
   }, [state]);
 
   const changePassword = useCallback(
-    async (currentPassword: string, newPassword: string) => {
+    async (currentPassword: string, newPassword: string): Promise<Result> => {
       if (state.status !== "authed") return { ok: false, error: "not_authed" };
       const result = await apiChangePassword(state.token, currentPassword, newPassword);
       if (!result.ok) return { ok: false, error: result.error };
@@ -83,9 +81,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [state],
   );
 
+  const refreshUser = useCallback(async () => {
+    if (state.status !== "authed") return;
+    const refreshed = await apiFetchMe(state.token);
+    if (refreshed) setState({ status: "authed", token: state.token, user: refreshed });
+  }, [state]);
+
   const value = useMemo(
-    () => ({ state, signIn, signOut, changePassword }),
-    [state, signIn, signOut, changePassword],
+    () => ({ state, signIn, signOut, changePassword, refreshUser }),
+    [state, signIn, signOut, changePassword, refreshUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

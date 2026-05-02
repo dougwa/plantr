@@ -1,0 +1,112 @@
+import type { Action, ActionKind, Photo, Plant, PlantType, User } from "@prisma/client";
+
+export type PublicPhoto = {
+  id: string;
+  createdAt: Date;
+  createdBy: { id: string; username: string };
+  urls: {
+    original: string;
+    thumb: string;
+    cover: string;
+  };
+};
+
+export type PublicAction = {
+  id: string;
+  kind: ActionKind;
+  notes: string | null;
+  takenAt: Date;
+  createdAt: Date;
+  createdBy: { id: string; username: string };
+};
+
+export type PublicPlant = {
+  id: string;
+  qrCode: string;
+  name: string | null;
+  type: { id: string; name: string } | null;
+  species: string | null;
+  description: string | null;
+  notes: string | null;
+  gpsLat: number | null;
+  gpsLng: number | null;
+  plantNetData: unknown;
+  locationShapeId: string | null;
+  coverPhoto: PublicPhoto | null;
+  photos: PublicPhoto[];
+  actions: PublicAction[];
+  createdBy: { id: string; username: string };
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+type PhotoWithCreator = Photo & { createdBy: Pick<User, "id" | "username"> };
+type ActionWithCreator = Action & { createdBy: Pick<User, "id" | "username"> };
+
+type PlantWithRelations = Plant & {
+  type: PlantType | null;
+  coverPhoto: PhotoWithCreator | null;
+  photos: PhotoWithCreator[];
+  actions: ActionWithCreator[];
+  createdBy: Pick<User, "id" | "username">;
+};
+
+export function publicPhoto(photo: PhotoWithCreator): PublicPhoto {
+  return {
+    id: photo.id,
+    createdAt: photo.createdAt,
+    createdBy: { id: photo.createdBy.id, username: photo.createdBy.username },
+    urls: {
+      original: `/photos/${photo.id}/file/original`,
+      thumb: `/photos/${photo.id}/file/thumb`,
+      cover: `/photos/${photo.id}/file/cover`,
+    },
+  };
+}
+
+export function publicAction(action: ActionWithCreator): PublicAction {
+  return {
+    id: action.id,
+    kind: action.kind,
+    notes: action.notes,
+    takenAt: action.takenAt,
+    createdAt: action.createdAt,
+    createdBy: { id: action.createdBy.id, username: action.createdBy.username },
+  };
+}
+
+export function publicPlant(plant: PlantWithRelations): PublicPlant {
+  return {
+    id: plant.id,
+    qrCode: plant.qrCode,
+    name: plant.name,
+    type: plant.type ? { id: plant.type.id, name: plant.type.name } : null,
+    species: plant.species,
+    description: plant.description,
+    notes: plant.notes,
+    gpsLat: plant.gpsLat,
+    gpsLng: plant.gpsLng,
+    plantNetData: plant.plantNetData,
+    locationShapeId: plant.locationShapeId,
+    coverPhoto: plant.coverPhoto ? publicPhoto(plant.coverPhoto) : null,
+    photos: plant.photos.map(publicPhoto),
+    actions: plant.actions.map(publicAction),
+    createdBy: { id: plant.createdBy.id, username: plant.createdBy.username },
+    createdAt: plant.createdAt,
+    updatedAt: plant.updatedAt,
+  };
+}
+
+export const PLANT_INCLUDE = {
+  type: true,
+  coverPhoto: { include: { createdBy: { select: { id: true, username: true } } } },
+  photos: {
+    orderBy: { createdAt: "asc" as const },
+    include: { createdBy: { select: { id: true, username: true } } },
+  },
+  actions: {
+    orderBy: { takenAt: "desc" as const },
+    include: { createdBy: { select: { id: true, username: true } } },
+  },
+  createdBy: { select: { id: true, username: true } },
+};

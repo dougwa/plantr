@@ -1,9 +1,11 @@
 import { StatusBar } from "expo-status-bar";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 import { AuthProvider, useAuth } from "./src/contexts/AuthContext";
 import LoginScreen from "./src/screens/LoginScreen";
 import ChangePasswordScreen from "./src/screens/ChangePasswordScreen";
-import HomeScreen from "./src/screens/HomeScreen";
+import AppNavigator from "./src/navigation/AppNavigator";
 
 function Router() {
   const { state } = useAuth();
@@ -16,15 +18,19 @@ function Router() {
   }
   if (state.status === "anon") return <LoginScreen />;
   if (state.user.mustChangePass) return <ChangePasswordScreen />;
-  return <HomeScreen />;
+  return <AppNavigator />;
 }
 
 export default function App() {
   return (
-    <AuthProvider>
-      <Router />
-      <StatusBar style="auto" />
-    </AuthProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <AuthProvider>
+          <Router />
+          <StatusBar style="auto" />
+        </AuthProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 
