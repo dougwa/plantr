@@ -206,3 +206,82 @@ export async function recordAction(
     token,
   });
 }
+
+// --- plants list (lightweight) ---------------------------------------------
+
+export type PlantListItem = {
+  id: string;
+  qrCode: string;
+  name: string | null;
+  type: { id: string; name: string } | null;
+  gpsLat: number | null;
+  gpsLng: number | null;
+  locationShapeId: string | null;
+  coverPhotoThumbUrl: string | null;
+};
+
+export async function listPlants(token: string) {
+  return request<{ plants: PlantListItem[] }>("/plants", { method: "GET", token });
+}
+
+// --- location shapes --------------------------------------------------------
+
+export type LocationShape = {
+  id: string;
+  name: string | null;
+  kind: "rectangle" | "ellipse";
+  color: string;
+  centerLat: number;
+  centerLng: number;
+  widthMeters: number;
+  heightMeters: number;
+  rotationDegrees: number;
+  locked: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export async function listLocationShapes(token: string) {
+  return request<{ shapes: LocationShape[] }>("/location-shapes", {
+    method: "GET",
+    token,
+  });
+}
+
+export async function createLocationShape(
+  token: string,
+  body: {
+    name?: string | null;
+    kind: "rectangle" | "ellipse";
+    color: string;
+    centerLat: number;
+    centerLng: number;
+    widthMeters: number;
+    heightMeters: number;
+  },
+) {
+  return request<{ shape: LocationShape }>("/location-shapes", {
+    method: "POST",
+    body: JSON.stringify(body),
+    token,
+  });
+}
+
+export async function patchLocationShape(
+  token: string,
+  id: string,
+  patch: Partial<LocationShape>,
+) {
+  return request<{ shape: LocationShape }>(`/location-shapes/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+    token,
+  });
+}
+
+export async function deleteLocationShape(token: string, id: string) {
+  return request<{ ok: boolean }>(`/location-shapes/${id}`, {
+    method: "DELETE",
+    token,
+  });
+}

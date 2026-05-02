@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { prisma } from "../db.js";
+import { pointInShape } from "../lib/geo.js";
 import { PLANT_INCLUDE, publicPlant } from "../lib/serializers.js";
 
 const qrCodeSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
@@ -22,7 +23,38 @@ const patchSchema = z.object({
   locationShapeId: z.string().nullable().optional(),
 });
 
+async function resolveShapeForPoint(lat: number | null, lng: number | null) {
+  if (lat == null || lng == null) return null;
+  const shapes = await prisma.locationShape.findMany();
+  const containing = shapes.find((s) => pointInShape(lat, lng, s));
+  return containing?.id ?? null;
+}
+
 export const plantRoutes: FastifyPluginAsync = async (app) => {
+  app.get("/plants", { onRequest: [app.requireAuth] }, async () => {
+    const plants = await prisma.plant.findMany({
+      orderBy: { createdAt: "asc" },
+      include: {
+        type: { select: { id: true, name: true } },
+        coverPhoto: { select: { id: true } },
+      },
+    });
+    return {
+      plants: plants.map((p) => ({
+        id: p.id,
+        qrCode: p.qrCode,
+        name: p.name,
+        type: p.type ? { id: p.type.id, name: p.type.name } : null,
+        gpsLat: p.gpsLat,
+        gpsLng: p.gpsLng,
+        locationShapeId: p.locationShapeId,
+        coverPhotoThumbUrl: p.coverPhoto
+          ? `/photos/${p.coverPhoto.id}/file/thumb`
+          : null,
+      })),
+    };
+  });
+
   app.get<{ Params: { code: string } }>(
     "/plants/by-qr/:code",
     { onRequest: [app.requireAuth] },
@@ -48,11 +80,14 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
     const existing = await prisma.plant.findUnique({ where: { qrCode } });
     if (existing) return reply.code(409).send({ error: "qr_code_taken" });
 
+    const locationShapeId = await resolveShapeForPoint(gpsLat ?? null, gpsLng ?? null);
+
     const plant = await prisma.plant.create({
       data: {
         qrCode,
         gpsLat: gpsLat ?? null,
         gpsLng: gpsLng ?? null,
+        locationShapeId,
         createdById: req.user!.id,
       },
       include: PLANT_INCLUDE,
@@ -88,6 +123,23 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
       if (data.typeId) {
         const exists = await prisma.plantType.findUnique({ where: { id: data.typeId } });
         if (!exists) return reply.code(400).send({ error: "invalid_type_id" });
+      }
+
+      // If GPS changed (and locationShapeId not explicitly set), re-resolve the shape.
+      if (
+        (data.gpsLat !== undefined || data.gpsLng !== undefined) &&
+        data.locationShapeId === undefined
+      ) {
+        const current = await prisma.plant.findUnique({
+          where: { id: req.params.id },
+          select: { gpsLat: true, gpsLng: true },
+        });
+        if (current) {
+          const lat = data.gpsLat !== undefined ? data.gpsLat : current.gpsLat;
+          const lng = data.gpsLng !== undefined ? data.gpsLng : current.gpsLng;
+          (data as { locationShapeId?: string | null }).locationShapeId =
+            await resolveShapeForPoint(lat, lng);
+        }
       }
 
       const updated = await prisma.plant

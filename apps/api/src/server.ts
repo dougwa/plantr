@@ -9,6 +9,7 @@ import { plantRoutes } from "./routes/plants.js";
 import { plantTypeRoutes } from "./routes/plant-types.js";
 import { photoRoutes } from "./routes/photos.js";
 import { actionRoutes } from "./routes/actions.js";
+import { locationShapeRoutes } from "./routes/location-shapes.js";
 
 const app = Fastify({ logger: true });
 
@@ -26,6 +27,7 @@ await app.register(plantTypeRoutes);
 await app.register(plantRoutes);
 await app.register(photoRoutes);
 await app.register(actionRoutes);
+await app.register(locationShapeRoutes);
 
 app.get("/health", async () => ({ ok: true, service: "plantr-api" }));
 

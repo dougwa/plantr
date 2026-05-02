@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { cookies } from "next/headers";
 import { fetchMeServerSide } from "@/lib/api";
 import LogoutButton from "./LogoutButton";
@@ -12,11 +13,21 @@ export default async function Home() {
 
   return (
     <main className="min-h-screen flex items-center justify-center p-8">
-      <div className="text-center space-y-4">
-        <h1 className="text-3xl font-semibold">PlantR</h1>
-        <p className="text-neutral-600">
-          Signed in as <span className="font-medium">{user?.username ?? "—"}</span>
-        </p>
+      <div className="text-center space-y-6">
+        <div>
+          <h1 className="text-3xl font-semibold">PlantR</h1>
+          <p className="mt-2 text-sm text-neutral-600">
+            Signed in as <span className="font-medium">{user?.username ?? "—"}</span>
+          </p>
+        </div>
+        <nav className="flex gap-3 justify-center">
+          <Link
+            href="/map"
+            className="rounded bg-neutral-900 px-4 py-2 text-sm text-white hover:bg-neutral-800"
+          >
+            Map
+          </Link>
+        </nav>
         <LogoutButton />
       </div>
     </main>

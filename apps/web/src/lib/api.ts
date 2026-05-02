@@ -8,18 +8,113 @@ export type AuthUser = {
   mustChangePass: boolean;
 };
 
-export async function fetchMeServerSide(cookieHeader: string | undefined): Promise<AuthUser | null> {
+export type ActionKind = "feeding" | "watering" | "fertilizing" | "treating";
+
+export type PublicPhoto = {
+  id: string;
+  createdAt: string;
+  createdBy: { id: string; username: string };
+  urls: { original: string; thumb: string; cover: string };
+};
+
+export type PublicAction = {
+  id: string;
+  kind: ActionKind;
+  notes: string | null;
+  takenAt: string;
+  createdAt: string;
+  createdBy: { id: string; username: string };
+};
+
+export type PublicPlant = {
+  id: string;
+  qrCode: string;
+  name: string | null;
+  type: { id: string; name: string } | null;
+  species: string | null;
+  description: string | null;
+  notes: string | null;
+  gpsLat: number | null;
+  gpsLng: number | null;
+  plantNetData: unknown;
+  locationShapeId: string | null;
+  coverPhoto: PublicPhoto | null;
+  photos: PublicPhoto[];
+  actions: PublicAction[];
+  createdBy: { id: string; username: string };
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PlantListItem = {
+  id: string;
+  qrCode: string;
+  name: string | null;
+  type: { id: string; name: string } | null;
+  gpsLat: number | null;
+  gpsLng: number | null;
+  locationShapeId: string | null;
+  coverPhotoThumbUrl: string | null;
+};
+
+export type LocationShape = {
+  id: string;
+  name: string | null;
+  kind: "rectangle" | "ellipse";
+  color: string;
+  centerLat: number;
+  centerLng: number;
+  widthMeters: number;
+  heightMeters: number;
+  rotationDegrees: number;
+  locked: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+async function apiFetch<T>(path: string, cookieHeader: string | undefined): Promise<T | null> {
   if (!cookieHeader) return null;
   try {
-    const res = await fetch(`${SERVER_API_URL}/auth/me`, {
+    const res = await fetch(`${SERVER_API_URL}${path}`, {
       method: "GET",
       headers: { cookie: cookieHeader },
       cache: "no-store",
     });
     if (res.status !== 200) return null;
-    const data = (await res.json()) as { user: AuthUser };
-    return data.user;
+    return (await res.json()) as T;
   } catch {
     return null;
   }
+}
+
+export async function fetchMeServerSide(cookieHeader: string | undefined): Promise<AuthUser | null> {
+  const data = await apiFetch<{ user: AuthUser }>("/auth/me", cookieHeader);
+  return data?.user ?? null;
+}
+
+export async function fetchPlantServerSide(
+  id: string,
+  cookieHeader: string | undefined,
+): Promise<PublicPlant | null> {
+  const data = await apiFetch<{ plant: PublicPlant }>(`/plants/${id}`, cookieHeader);
+  return data?.plant ?? null;
+}
+
+export async function fetchPlantsServerSide(
+  cookieHeader: string | undefined,
+): Promise<PlantListItem[]> {
+  const data = await apiFetch<{ plants: PlantListItem[] }>("/plants", cookieHeader);
+  return data?.plants ?? [];
+}
+
+export async function fetchLocationShapesServerSide(
+  cookieHeader: string | undefined,
+): Promise<LocationShape[]> {
+  const data = await apiFetch<{ shapes: LocationShape[] }>("/location-shapes", cookieHeader);
+  return data?.shapes ?? [];
+}
+
+// Photo URLs go through the Next.js /api rewrite so the auth cookie is sent.
+export function photoUrl(serverPath: string): string {
+  return `/api${serverPath}`;
 }
