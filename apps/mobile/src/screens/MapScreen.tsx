@@ -14,18 +14,22 @@ import {
   View,
 } from "react-native";
 import MapView, {
+  MapPressEvent,
   Marker,
   Polygon,
   PROVIDER_DEFAULT,
+  type Camera,
   type LatLng,
-  type LongPressEvent,
+  type MarkerDragStartEndEvent,
   type Region,
 } from "react-native-maps";
+import * as Location from "expo-location";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useAuth } from "../contexts/AuthContext";
+import { loadViewport, saveViewport } from "../lib/storage";
 import {
   createLocationShape,
   deleteLocationShape,
@@ -39,15 +43,35 @@ import type { RootStackParamList } from "../navigation/types";
 
 const METERS_PER_DEGREE_LAT = 111_320;
 const CLUSTER_RADIUS_M = 5;
+const MIN_HALF_M = 0.5; // minimum half-width/height in meters
+// Action-icon position is computed in pixels and converted to meters using
+// the current zoom. We enforce three pixel-space constraints; whichever
+// requires the largest offset wins.
+const RESIZE_BUBBLE_RADIUS_PX = 11; // visible bubble radius
+const ACTION_ICON_RADIUS_PX = 17; // visible chip radius
+const RESIZE_HIT_RADIUS_PX = 22; // half of 44pt resize hit area
+const ACTION_HIT_RADIUS_PX = 28; // half of 56pt action hit area
+const ICON_GAP_PX = 15;
 
-function distanceMeters(
-  a: { lat: number; lng: number },
-  b: { lat: number; lng: number },
-) {
-  const dLat = (a.lat - b.lat) * METERS_PER_DEGREE_LAT;
-  const dLng =
-    (a.lng - b.lng) * METERS_PER_DEGREE_LAT * Math.cos((a.lat * Math.PI) / 180);
-  return Math.sqrt(dLat * dLat + dLng * dLng);
+// 1) Radial: action icon edge sits 15 px past the resize bubble's outer edge.
+const RADIAL_OFFSET_PX =
+  RESIZE_BUBBLE_RADIUS_PX + ICON_GAP_PX + ACTION_ICON_RADIUS_PX;
+// 2) Adjacent action icons (90° apart) need 15 px between hit areas.
+const REQUIRED_ACTION_DIAG_PX =
+  (2 * ACTION_HIT_RADIUS_PX + ICON_GAP_PX) / Math.sqrt(2);
+// 3) An action icon and the perpendicular resize bubble need 15 px between
+//    their hit areas; the resize bubble sits on the shape edge.
+const REQUIRED_RESIZE_PERP_PX =
+  ACTION_HIT_RADIUS_PX + RESIZE_HIT_RADIUS_PX + ICON_GAP_PX;
+// Web-Mercator metres-per-pixel at the equator at zoom 0.
+const EARTH_CIRCUMFERENCE_M = 40_075_016.686;
+const TILE_SIZE_PX = 256;
+
+function metersPerPixel(zoom: number, lat: number): number {
+  return (
+    (EARTH_CIRCUMFERENCE_M * Math.cos((lat * Math.PI) / 180)) /
+    (TILE_SIZE_PX * Math.pow(2, zoom))
+  );
 }
 
 const COLOR_PALETTE = [
@@ -61,38 +85,70 @@ const COLOR_PALETTE = [
   "#525252",
 ];
 
-function metersToDegrees(meters: number, atLat: number) {
+function distanceMeters(
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number },
+) {
+  const dLat = (a.lat - b.lat) * METERS_PER_DEGREE_LAT;
+  const dLng =
+    (a.lng - b.lng) * METERS_PER_DEGREE_LAT * Math.cos((a.lat * Math.PI) / 180);
+  return Math.sqrt(dLat * dLat + dLng * dLng);
+}
+
+// Convert a (x=east, y=north) meters offset, in the shape's local frame,
+// to a world LatLng using the shape's center and rotation.
+function localToLatLng(shape: LocationShape, xLocal: number, yLocal: number): LatLng {
+  const cosLat = Math.cos((shape.centerLat * Math.PI) / 180);
+  const theta = (shape.rotationDegrees * Math.PI) / 180;
+  const cosT = Math.cos(theta);
+  const sinT = Math.sin(theta);
+  const xWorld = xLocal * cosT - yLocal * sinT;
+  const yWorld = xLocal * sinT + yLocal * cosT;
   return {
-    lat: meters / METERS_PER_DEGREE_LAT,
-    lng: meters / (METERS_PER_DEGREE_LAT * Math.cos((atLat * Math.PI) / 180)),
+    latitude: shape.centerLat + yWorld / METERS_PER_DEGREE_LAT,
+    longitude: shape.centerLng + xWorld / (METERS_PER_DEGREE_LAT * cosLat),
+  };
+}
+
+// Inverse of localToLatLng: given a world LatLng, return (x, y) in the
+// shape's local meters frame.
+function latLngToLocal(
+  shape: LocationShape,
+  coord: LatLng,
+): { x: number; y: number } {
+  const cosLat = Math.cos((shape.centerLat * Math.PI) / 180);
+  const xWorld =
+    (coord.longitude - shape.centerLng) * METERS_PER_DEGREE_LAT * cosLat;
+  const yWorld = (coord.latitude - shape.centerLat) * METERS_PER_DEGREE_LAT;
+  const theta = (shape.rotationDegrees * Math.PI) / 180;
+  const cosT = Math.cos(theta);
+  const sinT = Math.sin(theta);
+  return {
+    x: xWorld * cosT + yWorld * sinT,
+    y: -xWorld * sinT + yWorld * cosT,
   };
 }
 
 function rectangleCorners(s: LocationShape): LatLng[] {
-  const { lat: dLat, lng: dLng } = metersToDegrees(1, s.centerLat);
-  const halfH = (s.heightMeters / 2) * dLat;
-  const halfW = (s.widthMeters / 2) * dLng;
+  const halfW = s.widthMeters / 2;
+  const halfH = s.heightMeters / 2;
   return [
-    { latitude: s.centerLat - halfH, longitude: s.centerLng - halfW },
-    { latitude: s.centerLat - halfH, longitude: s.centerLng + halfW },
-    { latitude: s.centerLat + halfH, longitude: s.centerLng + halfW },
-    { latitude: s.centerLat + halfH, longitude: s.centerLng - halfW },
+    localToLatLng(s, -halfW, -halfH),
+    localToLatLng(s, halfW, -halfH),
+    localToLatLng(s, halfW, halfH),
+    localToLatLng(s, -halfW, halfH),
   ];
 }
 
 function ellipsePoints(s: LocationShape, segments = 48): LatLng[] {
-  const { lat: dLat, lng: dLng } = metersToDegrees(1, s.centerLat);
-  const halfH = (s.heightMeters / 2) * dLat;
-  const halfW = (s.widthMeters / 2) * dLng;
-  const points: LatLng[] = [];
+  const halfW = s.widthMeters / 2;
+  const halfH = s.heightMeters / 2;
+  const pts: LatLng[] = [];
   for (let i = 0; i < segments; i++) {
     const t = (i / segments) * 2 * Math.PI;
-    points.push({
-      latitude: s.centerLat + halfH * Math.sin(t),
-      longitude: s.centerLng + halfW * Math.cos(t),
-    });
+    pts.push(localToLatLng(s, halfW * Math.cos(t), halfH * Math.sin(t)));
   }
-  return points;
+  return pts;
 }
 
 function fitRegion(points: LatLng[]): Region | null {
@@ -117,13 +173,12 @@ function fitRegion(points: LatLng[]): Region | null {
   };
 }
 
-type EditorState = {
-  shape: LocationShape;
-  name: string;
-  color: string;
-  widthMeters: string;
-  heightMeters: string;
-};
+type Side = "n" | "e" | "s" | "w";
+type SubModal =
+  | { kind: "name"; shapeId: string; value: string }
+  | { kind: "color"; shapeId: string }
+  | { kind: "delete"; shapeId: string }
+  | null;
 
 export default function MapScreen() {
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
@@ -132,15 +187,24 @@ export default function MapScreen() {
   const [plants, setPlants] = useState<PlantListItem[]>([]);
   const [shapes, setShapes] = useState<LocationShape[]>([]);
   const [loading, setLoading] = useState(true);
-  const [editor, setEditor] = useState<EditorState | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [picker, setPicker] = useState<PlantListItem[] | null>(null);
+  const [subModal, setSubModal] = useState<SubModal>(null);
+  const [initialCamera, setInitialCamera] = useState<Camera | null>(null);
+  const [initialReady, setInitialReady] = useState(false);
+  const [viewportZoom, setViewportZoom] = useState<number | null>(null);
+  const hasSavedViewRef = useRef(false);
   const lastFitCountRef = useRef(0);
+  const lastShapeTapRef = useRef(0);
 
   const token = state.status === "authed" ? state.token : null;
 
   const reload = useCallback(async () => {
     if (!token) return;
-    const [pRes, sRes] = await Promise.all([listPlants(token), listLocationShapes(token)]);
+    const [pRes, sRes] = await Promise.all([
+      listPlants(token),
+      listLocationShapes(token),
+    ]);
     if (pRes.ok) setPlants(pRes.data.plants);
     if (sRes.ok) setShapes(sRes.data.shapes);
   }, [token]);
@@ -153,7 +217,55 @@ export default function MapScreen() {
     })();
   }, [reload]);
 
-  // Reload when the Map tab regains focus so newly-scanned plants show up.
+  // Resolve the initial camera once: prefer the last saved viewport;
+  // otherwise center on the user's current GPS; otherwise fall back to
+  // auto-fitting plants/shapes after they load.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const saved = await loadViewport();
+      if (cancelled) return;
+      if (saved) {
+        hasSavedViewRef.current = true;
+        setInitialCamera({
+          center: saved.center,
+          pitch: saved.pitch,
+          heading: saved.heading,
+          zoom: saved.zoom ?? 18,
+          altitude: saved.altitude ?? 200,
+        });
+        setInitialReady(true);
+        return;
+      }
+      try {
+        const perm = await Location.requestForegroundPermissionsAsync();
+        if (!cancelled && perm.status === "granted") {
+          const pos = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          });
+          if (cancelled) return;
+          hasSavedViewRef.current = true;
+          setInitialCamera({
+            center: {
+              latitude: pos.coords.latitude,
+              longitude: pos.coords.longitude,
+            },
+            pitch: 0,
+            heading: 0,
+            zoom: 18,
+            altitude: 200,
+          });
+        }
+      } catch {
+        // ignore — fall through to auto-fit
+      }
+      if (!cancelled) setInitialReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
       reload();
@@ -165,11 +277,17 @@ export default function MapScreen() {
     [plants],
   );
 
-  // Auto-fit on first load and whenever the set of plant pins grows
-  // (e.g. after a new scan). Don't refit on identical/shrinking sets so
-  // the user isn't yanked around while panning.
+  const editing = useMemo(
+    () => (editingId ? shapes.find((s) => s.id === editingId) ?? null : null),
+    [editingId, shapes],
+  );
+
+  // Auto-fit on first load and whenever the set of plant pins grows —
+  // but only if we don't have a saved/GPS-derived initial view that we
+  // explicitly want to respect.
   useEffect(() => {
     if (loading || !mapRef.current) return;
+    if (hasSavedViewRef.current) return;
     const count = plantsWithGps.length;
     if (count > 0 && count <= lastFitCountRef.current) return;
 
@@ -219,15 +337,20 @@ export default function MapScreen() {
     });
   }
 
-  async function addShapeAt(coord: LatLng) {
+  async function addShapeAtCenter() {
     if (!token) return;
+    const camera = await mapRef.current?.getCamera();
+    if (!camera) {
+      Alert.alert("Map not ready");
+      return;
+    }
     const kind = await chooseShapeKind();
     if (!kind) return;
     const r = await createLocationShape(token, {
       kind,
       color: COLOR_PALETTE[shapes.length % COLOR_PALETTE.length] ?? COLOR_PALETTE[0]!,
-      centerLat: coord.latitude,
-      centerLng: coord.longitude,
+      centerLat: camera.center.latitude,
+      centerLng: camera.center.longitude,
       widthMeters: 8,
       heightMeters: 8,
       name: null,
@@ -237,20 +360,19 @@ export default function MapScreen() {
       return;
     }
     setShapes((cur) => [...cur, r.data.shape]);
-    openEditor(r.data.shape);
+    setEditingId(r.data.shape.id);
   }
 
-  async function addShapeAtCenter() {
-    const region = await mapRef.current?.getCamera();
-    if (!region) {
-      Alert.alert("Map not ready");
-      return;
-    }
-    await addShapeAt(region.center);
+  function onShapeTap(s: LocationShape) {
+    lastShapeTapRef.current = Date.now();
+    setEditingId(s.id);
   }
 
-  function onMapLongPress(e: LongPressEvent) {
-    addShapeAt(e.nativeEvent.coordinate);
+  function onMapPress(_e: MapPressEvent) {
+    // Polygons fire onPress before MapView's onPress; this is a defensive
+    // guard against the rare race where both fire.
+    if (Date.now() - lastShapeTapRef.current < 200) return;
+    setEditingId(null);
   }
 
   function onMarkerPress(p: PlantListItem) {
@@ -271,70 +393,281 @@ export default function MapScreen() {
     nav.navigate("PlantDetail", { plantId });
   }
 
-  function openEditor(shape: LocationShape) {
-    setEditor({
-      shape,
-      name: shape.name ?? "",
-      color: shape.color,
-      widthMeters: String(shape.widthMeters),
-      heightMeters: String(shape.heightMeters),
+  async function recenterOnUser() {
+    try {
+      const perm = await Location.requestForegroundPermissionsAsync();
+      if (perm.status !== "granted") {
+        Alert.alert(
+          "Location not available",
+          "Enable location access for PlantR in Settings to recenter on your position.",
+        );
+        return;
+      }
+      const pos = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Highest,
+      });
+      const cam = await mapRef.current?.getCamera();
+      mapRef.current?.animateCamera(
+        {
+          center: {
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+          },
+          zoom: cam?.zoom ?? 18,
+          altitude: cam?.altitude ?? 200,
+          pitch: cam?.pitch ?? 0,
+          heading: cam?.heading ?? 0,
+        },
+        { duration: 400 },
+      );
+    } catch (err) {
+      console.warn("recenter failed", err);
+    }
+  }
+
+  async function persistViewport() {
+    if (!mapRef.current) return;
+    const cam = await mapRef.current.getCamera();
+    if (!cam?.center) return;
+    hasSavedViewRef.current = true;
+    if (cam.zoom != null) setViewportZoom(cam.zoom);
+    saveViewport({
+      center: cam.center,
+      pitch: cam.pitch ?? 0,
+      heading: cam.heading ?? 0,
+      zoom: cam.zoom,
+      altitude: cam.altitude,
     });
   }
 
-  async function saveEditor() {
-    if (!token || !editor) return;
-    const w = Number(editor.widthMeters);
-    const h = Number(editor.heightMeters);
-    if (!Number.isFinite(w) || w <= 0 || !Number.isFinite(h) || h <= 0) {
-      Alert.alert("Invalid size", "Width and height must be positive numbers.");
-      return;
+  // Pull the initial zoom from whatever camera the map ends up rendering
+  // with, so EditOverlay can size the action-icon offsets correctly even
+  // before the user has moved the map.
+  useEffect(() => {
+    if (!initialReady) return;
+    let cancelled = false;
+    (async () => {
+      // Small delay so MapKit/Google Maps has installed the camera.
+      await new Promise((r) => setTimeout(r, 50));
+      const cam = await mapRef.current?.getCamera();
+      if (!cancelled && cam?.zoom != null) setViewportZoom(cam.zoom);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [initialReady]);
+
+  const iconOffsetM = useMemo(() => {
+    if (viewportZoom == null) return 6; // safe fallback before the camera is known
+    const lat = editing?.centerLat ?? initialCamera?.center.latitude ?? 0;
+    const mpp = metersPerPixel(viewportZoom, lat);
+    if (!editing) return RADIAL_OFFSET_PX * mpp;
+
+    // Smaller axis governs the worst case for both diagonal constraints.
+    const minHalfPx = Math.min(editing.widthMeters, editing.heightMeters) / 2 / mpp;
+
+    const diagActionPx = Math.max(
+      0,
+      REQUIRED_ACTION_DIAG_PX - minHalfPx,
+    );
+    let resizePerpPx = 0;
+    if (minHalfPx < REQUIRED_RESIZE_PERP_PX) {
+      resizePerpPx =
+        Math.sqrt(
+          REQUIRED_RESIZE_PERP_PX * REQUIRED_RESIZE_PERP_PX -
+            minHalfPx * minHalfPx,
+        ) - minHalfPx;
     }
-    const r = await patchLocationShape(token, editor.shape.id, {
-      name: editor.name.trim() || null,
-      color: editor.color,
-      widthMeters: w,
-      heightMeters: h,
+
+    const offsetPx = Math.max(RADIAL_OFFSET_PX, diagActionPx, resizePerpPx);
+    return offsetPx * mpp;
+  }, [
+    viewportZoom,
+    editing?.centerLat,
+    editing?.widthMeters,
+    editing?.heightMeters,
+    initialCamera?.center.latitude,
+  ]);
+
+  // --- move / resize / rotate handlers --------------------------------------
+
+  function applyMove(coord: LatLng) {
+    if (!editing) return;
+    setShapes((cur) =>
+      cur.map((s) =>
+        s.id === editing.id
+          ? { ...s, centerLat: coord.latitude, centerLng: coord.longitude }
+          : s,
+      ),
+    );
+  }
+
+  async function persistMove() {
+    if (!editing || !token) return;
+    const r = await patchLocationShape(token, editing.id, {
+      centerLat: editing.centerLat,
+      centerLng: editing.centerLng,
     });
+    if (!r.ok) {
+      Alert.alert("Move failed", r.error);
+      reload();
+    } else {
+      setShapes((cur) =>
+        cur.map((s) => (s.id === r.data.shape.id ? r.data.shape : s)),
+      );
+    }
+  }
+
+  function applyResize(side: Side, coord: LatLng) {
+    if (!editing) return;
+    const local = latLngToLocal(editing, coord);
+    const oldHalfW = editing.widthMeters / 2;
+    const oldHalfH = editing.heightMeters / 2;
+
+    let widthMeters = editing.widthMeters;
+    let heightMeters = editing.heightMeters;
+    let shiftX = 0;
+    let shiftY = 0;
+
+    if (side === "e") {
+      const xLocal = Math.max(local.x, -oldHalfW + MIN_HALF_M * 2);
+      widthMeters = xLocal + oldHalfW;
+      shiftX = (xLocal - oldHalfW) / 2;
+    } else if (side === "w") {
+      const xLocal = Math.min(local.x, oldHalfW - MIN_HALF_M * 2);
+      widthMeters = oldHalfW - xLocal;
+      shiftX = (oldHalfW + xLocal) / 2;
+    } else if (side === "n") {
+      const yLocal = Math.max(local.y, -oldHalfH + MIN_HALF_M * 2);
+      heightMeters = yLocal + oldHalfH;
+      shiftY = (yLocal - oldHalfH) / 2;
+    } else if (side === "s") {
+      const yLocal = Math.min(local.y, oldHalfH - MIN_HALF_M * 2);
+      heightMeters = oldHalfH - yLocal;
+      shiftY = (oldHalfH + yLocal) / 2;
+    }
+
+    // Translate the shape so the opposite side stays anchored.
+    const theta = (editing.rotationDegrees * Math.PI) / 180;
+    const cosT = Math.cos(theta);
+    const sinT = Math.sin(theta);
+    const xWorld = shiftX * cosT - shiftY * sinT;
+    const yWorld = shiftX * sinT + shiftY * cosT;
+    const cosLat = Math.cos((editing.centerLat * Math.PI) / 180);
+    const centerLat = editing.centerLat + yWorld / METERS_PER_DEGREE_LAT;
+    const centerLng =
+      editing.centerLng + xWorld / (METERS_PER_DEGREE_LAT * cosLat);
+
+    setShapes((cur) =>
+      cur.map((s) =>
+        s.id === editing.id
+          ? { ...s, widthMeters, heightMeters, centerLat, centerLng }
+          : s,
+      ),
+    );
+  }
+
+  async function persistResize() {
+    if (!editing || !token) return;
+    const r = await patchLocationShape(token, editing.id, {
+      widthMeters: editing.widthMeters,
+      heightMeters: editing.heightMeters,
+      centerLat: editing.centerLat,
+      centerLng: editing.centerLng,
+    });
+    if (!r.ok) {
+      Alert.alert("Resize failed", r.error);
+      reload();
+    } else {
+      setShapes((cur) =>
+        cur.map((s) => (s.id === r.data.shape.id ? r.data.shape : s)),
+      );
+    }
+  }
+
+  function applyRotate(coord: LatLng) {
+    if (!editing) return;
+    // Direction from shape center to drag point, in world meters.
+    const cosLat = Math.cos((editing.centerLat * Math.PI) / 180);
+    const xWorld =
+      (coord.longitude - editing.centerLng) * METERS_PER_DEGREE_LAT * cosLat;
+    const yWorld =
+      (coord.latitude - editing.centerLat) * METERS_PER_DEGREE_LAT;
+    if (xWorld === 0 && yWorld === 0) return;
+    // angleFromEast in degrees, atan2(north, east).
+    const angleFromEast = (Math.atan2(yWorld, xWorld) * 180) / Math.PI;
+    // Natural position of the rotate handle is at local +y (north),
+    // i.e. 90° from east. So new rotation = angle - 90°.
+    let next = angleFromEast - 90;
+    // Normalize to [-180, 180].
+    while (next > 180) next -= 360;
+    while (next < -180) next += 360;
+    setShapes((cur) =>
+      cur.map((s) =>
+        s.id === editing.id ? { ...s, rotationDegrees: next } : s,
+      ),
+    );
+  }
+
+  async function persistRotate() {
+    if (!editing || !token) return;
+    const r = await patchLocationShape(token, editing.id, {
+      rotationDegrees: editing.rotationDegrees,
+    });
+    if (!r.ok) {
+      Alert.alert("Rotate failed", r.error);
+      reload();
+    } else {
+      setShapes((cur) =>
+        cur.map((s) => (s.id === r.data.shape.id ? r.data.shape : s)),
+      );
+    }
+  }
+
+  // --- name / color / delete --------------------------------------------------
+
+  async function saveName() {
+    if (!token || subModal?.kind !== "name") return;
+    const next = subModal.value.trim() || null;
+    const r = await patchLocationShape(token, subModal.shapeId, { name: next });
     if (!r.ok) {
       Alert.alert("Save failed", r.error);
       return;
     }
-    setShapes((cur) => cur.map((s) => (s.id === r.data.shape.id ? r.data.shape : s)));
-    setEditor(null);
+    setShapes((cur) =>
+      cur.map((s) => (s.id === r.data.shape.id ? r.data.shape : s)),
+    );
+    setSubModal(null);
   }
 
-  async function toggleLock() {
-    if (!token || !editor) return;
-    const r = await patchLocationShape(token, editor.shape.id, {
-      locked: !editor.shape.locked,
-    });
-    if (!r.ok) return;
-    setShapes((cur) => cur.map((s) => (s.id === r.data.shape.id ? r.data.shape : s)));
-    setEditor({ ...editor, shape: r.data.shape });
+  async function pickColor(color: string) {
+    if (!token || subModal?.kind !== "color") return;
+    const r = await patchLocationShape(token, subModal.shapeId, { color });
+    if (!r.ok) {
+      Alert.alert("Save failed", r.error);
+      return;
+    }
+    setShapes((cur) =>
+      cur.map((s) => (s.id === r.data.shape.id ? r.data.shape : s)),
+    );
+    setSubModal(null);
   }
 
-  async function deleteShape() {
-    if (!token || !editor) return;
-    Alert.alert("Delete location?", "This cannot be undone.", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: async () => {
-          const r = await deleteLocationShape(token, editor.shape.id);
-          if (!r.ok) {
-            Alert.alert("Delete failed", r.error);
-            return;
-          }
-          setShapes((cur) => cur.filter((s) => s.id !== editor.shape.id));
-          setEditor(null);
-          await reload(); // refresh plants in case some were attached
-        },
-      },
-    ]);
+  async function confirmDelete() {
+    if (!token || subModal?.kind !== "delete") return;
+    const id = subModal.shapeId;
+    const r = await deleteLocationShape(token, id);
+    if (!r.ok) {
+      Alert.alert("Delete failed", r.error);
+      return;
+    }
+    setShapes((cur) => cur.filter((s) => s.id !== id));
+    setSubModal(null);
+    setEditingId(null);
+    reload(); // refresh plants in case some were attached
   }
 
-  if (loading) {
+  if (loading || !initialReady) {
     return (
       <View style={styles.loading}>
         <ActivityIndicator />
@@ -349,19 +682,20 @@ export default function MapScreen() {
         provider={PROVIDER_DEFAULT}
         mapType="hybrid"
         style={StyleSheet.absoluteFill}
-        onLongPress={onMapLongPress}
+        onPress={onMapPress}
+        onRegionChangeComplete={persistViewport}
+        showsUserLocation
+        {...(initialCamera ? { initialCamera } : {})}
       >
         {shapes.map((s) => (
           <Polygon
             key={s.id}
-            coordinates={
-              s.kind === "ellipse" ? ellipsePoints(s) : rectangleCorners(s)
-            }
+            coordinates={s.kind === "ellipse" ? ellipsePoints(s) : rectangleCorners(s)}
             strokeColor={s.color}
             fillColor={`${s.color}33`}
             strokeWidth={2}
             tappable
-            onPress={() => openEditor(s)}
+            onPress={() => onShapeTap(s)}
           />
         ))}
         {plantsWithGps.map((p) => (
@@ -379,9 +713,37 @@ export default function MapScreen() {
             </View>
           </Marker>
         ))}
+
+        {editing && <EditOverlay
+          shape={editing}
+          iconOffsetM={iconOffsetM}
+          onMoveDrag={(e) => applyMove(e.nativeEvent.coordinate)}
+          onMoveEnd={persistMove}
+          onResizeDrag={(side, e) => applyResize(side, e.nativeEvent.coordinate)}
+          onResizeEnd={persistResize}
+          onRotateDrag={(e) => applyRotate(e.nativeEvent.coordinate)}
+          onRotateEnd={persistRotate}
+          onTapName={() =>
+            setSubModal({
+              kind: "name",
+              shapeId: editing.id,
+              value: editing.name ?? "",
+            })
+          }
+          onTapColor={() => setSubModal({ kind: "color", shapeId: editing.id })}
+          onTapDelete={() => setSubModal({ kind: "delete", shapeId: editing.id })}
+        />}
       </MapView>
 
       <SafeAreaView style={styles.fabSafe} edges={["bottom"]} pointerEvents="box-none">
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Recenter on my location"
+          style={styles.recenterButton}
+          onPress={recenterOnUser}
+        >
+          <Ionicons name="locate" size={22} color="#171717" />
+        </Pressable>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Add location"
@@ -395,142 +757,357 @@ export default function MapScreen() {
       <SafeAreaView style={styles.helpSafe} edges={["top"]} pointerEvents="box-none">
         <View style={styles.helpPill}>
           <Text style={styles.helpText}>
-            Long-press to add a location · Tap a marker for details
+            {editing
+              ? "Drag center to move · sides to resize · rotator to rotate · tap map to finish"
+              : "Tap a location to edit · Tap a marker for details"}
           </Text>
         </View>
       </SafeAreaView>
 
-      <Modal
-        transparent
-        visible={picker !== null}
-        animationType="fade"
-        onRequestClose={() => setPicker(null)}
-      >
-        {picker && (
-          <Pressable style={styles.modalBackdrop} onPress={() => setPicker(null)}>
-            <Pressable style={styles.modalSheet} onPress={() => {}}>
-              <Text style={styles.modalTitle}>
-                {picker.length} plants here
-              </Text>
-              <ScrollView keyboardShouldPersistTaps="handled">
-                {picker.map((p) => (
-                  <TouchableOpacity
-                    key={p.id}
-                    style={styles.pickerRow}
-                    onPress={() => pickFromCluster(p.id)}
-                  >
-                    <View style={styles.pickerDot}>
-                      <View style={styles.dotInner} />
-                    </View>
-                    <View style={styles.pickerText}>
-                      <Text style={styles.pickerName}>
-                        {p.name?.trim() || p.qrCode}
-                      </Text>
-                      <Text style={styles.pickerType}>
-                        {[p.name?.trim() ? p.qrCode : null, p.type?.name]
-                          .filter(Boolean)
-                          .join(" · ")}
-                      </Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={18} color="#a3a3a3" />
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-              <View style={styles.modalButtons}>
-                <TouchableOpacity onPress={() => setPicker(null)} style={styles.cancelBtn}>
-                  <Text style={styles.cancelText}>Cancel</Text>
-                </TouchableOpacity>
-              </View>
-            </Pressable>
-          </Pressable>
-        )}
-      </Modal>
+      <NamePickerModal
+        sub={subModal}
+        onChange={(v) =>
+          setSubModal((cur) =>
+            cur && cur.kind === "name" ? { ...cur, value: v } : cur,
+          )
+        }
+        onCancel={() => setSubModal(null)}
+        onSave={saveName}
+      />
+      <ColorPickerModal
+        sub={subModal}
+        currentColor={editing?.color ?? null}
+        onCancel={() => setSubModal(null)}
+        onPick={pickColor}
+      />
+      <DeleteConfirmModal
+        sub={subModal}
+        onCancel={() => setSubModal(null)}
+        onConfirm={confirmDelete}
+      />
 
-      <Modal
-        transparent
-        visible={editor !== null}
-        animationType="fade"
-        onRequestClose={() => setEditor(null)}
-      >
-        {editor && (
-          <Pressable style={styles.modalBackdrop} onPress={() => setEditor(null)}>
-            <Pressable style={styles.modalSheet} onPress={() => {}}>
-              <ScrollView keyboardShouldPersistTaps="handled">
-                <Text style={styles.modalTitle}>
-                  Edit {editor.shape.kind === "ellipse" ? "Ellipse" : "Rectangle"}
-                </Text>
-                <Text style={styles.modalLabel}>Name</Text>
-                <TextInput
-                  style={styles.modalInput}
-                  value={editor.name}
-                  onChangeText={(t) => setEditor({ ...editor, name: t })}
-                  placeholder="e.g. Big Rose Garden"
-                />
-                <Text style={styles.modalLabel}>Color</Text>
-                <View style={styles.swatchRow}>
-                  {COLOR_PALETTE.map((c) => (
-                    <Pressable
-                      key={c}
-                      onPress={() => setEditor({ ...editor, color: c })}
-                      style={[
-                        styles.swatch,
-                        { backgroundColor: c },
-                        editor.color === c && styles.swatchActive,
-                      ]}
-                    />
-                  ))}
-                </View>
-                <View style={styles.sizeRow}>
-                  <View style={styles.sizeField}>
-                    <Text style={styles.modalLabel}>Width (m)</Text>
-                    <TextInput
-                      style={styles.modalInput}
-                      keyboardType="decimal-pad"
-                      value={editor.widthMeters}
-                      onChangeText={(t) => setEditor({ ...editor, widthMeters: t })}
-                    />
-                  </View>
-                  <View style={styles.sizeField}>
-                    <Text style={styles.modalLabel}>Height (m)</Text>
-                    <TextInput
-                      style={styles.modalInput}
-                      keyboardType="decimal-pad"
-                      value={editor.heightMeters}
-                      onChangeText={(t) => setEditor({ ...editor, heightMeters: t })}
-                    />
-                  </View>
-                </View>
-
-                <View style={styles.lockRow}>
-                  <TouchableOpacity onPress={toggleLock} style={styles.lockButton}>
-                    <Ionicons
-                      name={editor.shape.locked ? "lock-closed" : "lock-open"}
-                      size={16}
-                      color="#171717"
-                    />
-                    <Text style={styles.lockText}>
-                      {editor.shape.locked ? "Locked" : "Unlocked"}
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={deleteShape} style={styles.deleteButton}>
-                    <Text style={styles.deleteText}>Delete</Text>
-                  </TouchableOpacity>
-                </View>
-
-                <View style={styles.modalButtons}>
-                  <TouchableOpacity onPress={() => setEditor(null)} style={styles.cancelBtn}>
-                    <Text style={styles.cancelText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={saveEditor} style={styles.saveBtn}>
-                    <Text style={styles.saveText}>Save</Text>
-                  </TouchableOpacity>
-                </View>
-              </ScrollView>
-            </Pressable>
-          </Pressable>
-        )}
-      </Modal>
+      <ClusterPickerModal
+        picker={picker}
+        onCancel={() => setPicker(null)}
+        onPick={pickFromCluster}
+      />
     </View>
+  );
+}
+
+// ---- edit-mode overlay (handles + action icons) ----------------------------
+
+type EditOverlayProps = {
+  shape: LocationShape;
+  iconOffsetM: number;
+  onMoveDrag: (e: MarkerDragStartEndEvent) => void;
+  onMoveEnd: () => void;
+  onResizeDrag: (side: Side, e: MarkerDragStartEndEvent) => void;
+  onResizeEnd: () => void;
+  onRotateDrag: (e: MarkerDragStartEndEvent) => void;
+  onRotateEnd: () => void;
+  onTapName: () => void;
+  onTapColor: () => void;
+  onTapDelete: () => void;
+};
+
+function EditOverlay({
+  shape,
+  iconOffsetM,
+  onMoveDrag,
+  onMoveEnd,
+  onResizeDrag,
+  onResizeEnd,
+  onRotateDrag,
+  onRotateEnd,
+  onTapName,
+  onTapColor,
+  onTapDelete,
+}: EditOverlayProps) {
+  const halfW = shape.widthMeters / 2;
+  const halfH = shape.heightMeters / 2;
+
+  const handleN = localToLatLng(shape, 0, halfH);
+  const handleE = localToLatLng(shape, halfW, 0);
+  const handleS = localToLatLng(shape, 0, -halfH);
+  const handleW = localToLatLng(shape, -halfW, 0);
+
+  const rotateAt = localToLatLng(shape, 0, halfH + iconOffsetM);
+  const nameAt = localToLatLng(shape, halfW + iconOffsetM, 0);
+  const colorAt = localToLatLng(shape, -halfW - iconOffsetM, 0);
+  const deleteAt = localToLatLng(shape, 0, -halfH - iconOffsetM);
+
+  const center: LatLng = { latitude: shape.centerLat, longitude: shape.centerLng };
+
+  return (
+    <>
+      <Marker
+        coordinate={center}
+        anchor={{ x: 0.5, y: 0.5 }}
+        draggable
+        tracksViewChanges={false}
+        onDrag={onMoveDrag}
+        onDragEnd={onMoveEnd}
+      >
+        <View style={styles.hitLarge}>
+          <View style={styles.moveTargetRing} />
+          <View style={styles.moveTargetDot} />
+        </View>
+      </Marker>
+
+      {(["n", "e", "s", "w"] as Side[]).map((side) => {
+        const coord =
+          side === "n"
+            ? handleN
+            : side === "e"
+              ? handleE
+              : side === "s"
+                ? handleS
+                : handleW;
+        return (
+          <Marker
+            key={`resize-${side}`}
+            coordinate={coord}
+            anchor={{ x: 0.5, y: 0.5 }}
+            draggable
+            tracksViewChanges={false}
+            onDrag={(e) => onResizeDrag(side, e)}
+            onDragEnd={onResizeEnd}
+          >
+            <View style={styles.hitMed}>
+              <View style={styles.resizeBubble} />
+            </View>
+          </Marker>
+        );
+      })}
+
+      <Marker
+        coordinate={rotateAt}
+        anchor={{ x: 0.5, y: 0.5 }}
+        draggable
+        tracksViewChanges={false}
+        onDrag={onRotateDrag}
+        onDragEnd={onRotateEnd}
+      >
+        <View style={styles.hitLarge}>
+          <View style={styles.actionChip}>
+            <Ionicons name="sync-outline" size={18} color="#171717" />
+          </View>
+        </View>
+      </Marker>
+
+      <Marker
+        coordinate={nameAt}
+        anchor={{ x: 0.5, y: 0.5 }}
+        tracksViewChanges={false}
+        onPress={onTapName}
+      >
+        <View style={styles.hitLarge}>
+          <View style={styles.actionChip}>
+            <Ionicons name="text-outline" size={18} color="#171717" />
+          </View>
+        </View>
+      </Marker>
+
+      <Marker
+        coordinate={colorAt}
+        anchor={{ x: 0.5, y: 0.5 }}
+        tracksViewChanges={false}
+        onPress={onTapColor}
+      >
+        <View style={styles.hitLarge}>
+          <View style={[styles.actionChip, { backgroundColor: shape.color }]}>
+            <Ionicons name="color-palette-outline" size={18} color="#fff" />
+          </View>
+        </View>
+      </Marker>
+
+      <Marker
+        coordinate={deleteAt}
+        anchor={{ x: 0.5, y: 0.5 }}
+        tracksViewChanges={false}
+        onPress={onTapDelete}
+      >
+        <View style={styles.hitLarge}>
+          <View style={[styles.actionChip, styles.actionChipDanger]}>
+            <Ionicons name="trash-outline" size={18} color="#fff" />
+          </View>
+        </View>
+      </Marker>
+    </>
+  );
+}
+
+// ---- modals ----------------------------------------------------------------
+
+function NamePickerModal({
+  sub,
+  onChange,
+  onCancel,
+  onSave,
+}: {
+  sub: SubModal;
+  onChange: (v: string) => void;
+  onCancel: () => void;
+  onSave: () => void;
+}) {
+  const visible = sub?.kind === "name";
+  return (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onCancel}>
+      {visible && (
+        <Pressable style={styles.modalBackdrop} onPress={onCancel}>
+          <Pressable style={styles.modalSheet} onPress={() => {}}>
+            <Text style={styles.modalTitle}>Location name</Text>
+            <TextInput
+              style={styles.modalInput}
+              value={sub.value}
+              onChangeText={onChange}
+              placeholder="e.g. Big Rose Garden"
+              autoFocus
+            />
+            <View style={styles.modalButtons}>
+              <TouchableOpacity onPress={onCancel} style={styles.cancelBtn}>
+                <Text style={styles.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={onSave} style={styles.saveBtn}>
+                <Text style={styles.saveText}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      )}
+    </Modal>
+  );
+}
+
+function ColorPickerModal({
+  sub,
+  currentColor,
+  onCancel,
+  onPick,
+}: {
+  sub: SubModal;
+  currentColor: string | null;
+  onCancel: () => void;
+  onPick: (c: string) => void;
+}) {
+  const visible = sub?.kind === "color";
+  return (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onCancel}>
+      {visible && (
+        <Pressable style={styles.modalBackdrop} onPress={onCancel}>
+          <Pressable style={styles.modalSheet} onPress={() => {}}>
+            <Text style={styles.modalTitle}>Pick a color</Text>
+            <View style={styles.swatchRow}>
+              {COLOR_PALETTE.map((c) => (
+                <Pressable
+                  key={c}
+                  onPress={() => onPick(c)}
+                  style={[
+                    styles.swatch,
+                    { backgroundColor: c },
+                    currentColor === c && styles.swatchActive,
+                  ]}
+                />
+              ))}
+            </View>
+            <View style={styles.modalButtons}>
+              <TouchableOpacity onPress={onCancel} style={styles.cancelBtn}>
+                <Text style={styles.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      )}
+    </Modal>
+  );
+}
+
+function DeleteConfirmModal({
+  sub,
+  onCancel,
+  onConfirm,
+}: {
+  sub: SubModal;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const visible = sub?.kind === "delete";
+  return (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onCancel}>
+      {visible && (
+        <Pressable style={styles.modalBackdrop} onPress={onCancel}>
+          <Pressable style={styles.modalSheet} onPress={() => {}}>
+            <Text style={styles.modalTitle}>Delete location?</Text>
+            <Text style={styles.modalBody}>This cannot be undone.</Text>
+            <View style={styles.modalButtons}>
+              <TouchableOpacity onPress={onCancel} style={styles.cancelBtn}>
+                <Text style={styles.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={onConfirm} style={styles.deleteBtn}>
+                <Text style={styles.deleteBtnText}>Delete</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      )}
+    </Modal>
+  );
+}
+
+function ClusterPickerModal({
+  picker,
+  onCancel,
+  onPick,
+}: {
+  picker: PlantListItem[] | null;
+  onCancel: () => void;
+  onPick: (id: string) => void;
+}) {
+  return (
+    <Modal
+      transparent
+      visible={picker !== null}
+      animationType="fade"
+      onRequestClose={onCancel}
+    >
+      {picker && (
+        <Pressable style={styles.modalBackdrop} onPress={onCancel}>
+          <Pressable style={styles.modalSheet} onPress={() => {}}>
+            <Text style={styles.modalTitle}>{picker.length} plants here</Text>
+            <ScrollView keyboardShouldPersistTaps="handled">
+              {picker.map((p) => (
+                <TouchableOpacity
+                  key={p.id}
+                  style={styles.pickerRow}
+                  onPress={() => onPick(p.id)}
+                >
+                  <View style={styles.pickerDot}>
+                    <View style={styles.dotInner} />
+                  </View>
+                  <View style={styles.pickerText}>
+                    <Text style={styles.pickerName}>
+                      {p.name?.trim() || p.qrCode}
+                    </Text>
+                    <Text style={styles.pickerType}>
+                      {[p.name?.trim() ? p.qrCode : null, p.type?.name]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color="#a3a3a3" />
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <View style={styles.modalButtons}>
+              <TouchableOpacity onPress={onCancel} style={styles.cancelBtn}>
+                <Text style={styles.cancelText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      )}
+    </Modal>
   );
 }
 
@@ -545,17 +1122,68 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  dotInner: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: "#16a34a",
+  dotInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: "#16a34a" },
+
+  hitMed: {
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "transparent",
   },
-  fabSafe: {
+  hitLarge: {
+    width: 56,
+    height: 56,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "transparent",
+  },
+  moveTargetRing: {
     position: "absolute",
-    right: 16,
-    bottom: 16,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: "#171717",
+    backgroundColor: "rgba(255,255,255,0.6)",
   },
+  moveTargetDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#171717",
+  },
+  resizeBubble: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: "#fff",
+    borderWidth: 2,
+    borderColor: "#171717",
+    shadowColor: "#000",
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 3,
+  },
+  actionChip: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "#fff",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#e5e5e5",
+    shadowColor: "#000",
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 3,
+  },
+  actionChipDanger: { backgroundColor: "#dc2626", borderColor: "#dc2626" },
+
+  fabSafe: { position: "absolute", right: 16, bottom: 16, gap: 12, alignItems: "flex-end" },
   fab: {
     width: 56,
     height: 56,
@@ -568,6 +1196,21 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 3 },
     elevation: 6,
+  },
+  recenterButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#fff",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#e5e5e5",
   },
   helpSafe: {
     position: "absolute",
@@ -598,7 +1241,7 @@ const styles = StyleSheet.create({
     maxHeight: "80%",
   },
   modalTitle: { fontSize: 18, fontWeight: "600", marginBottom: 12 },
-  modalLabel: { fontSize: 13, color: "#525252", marginTop: 8, marginBottom: 4 },
+  modalBody: { fontSize: 14, color: "#525252", marginBottom: 12 },
   modalInput: {
     borderWidth: 1,
     borderColor: "#d4d4d4",
@@ -608,35 +1251,13 @@ const styles = StyleSheet.create({
   },
   swatchRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   swatch: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     borderWidth: 2,
     borderColor: "#fff",
   },
-  swatchActive: {
-    borderColor: "#171717",
-  },
-  sizeRow: { flexDirection: "row", gap: 12 },
-  sizeField: { flex: 1 },
-  lockRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginTop: 16,
-  },
-  lockButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    backgroundColor: "#f5f5f5",
-    borderRadius: 6,
-  },
-  lockText: { fontSize: 13, color: "#171717" },
-  deleteButton: { paddingVertical: 8, paddingHorizontal: 10 },
-  deleteText: { color: "#dc2626", fontSize: 13 },
+  swatchActive: { borderColor: "#171717" },
   modalButtons: {
     flexDirection: "row",
     justifyContent: "flex-end",
@@ -652,6 +1273,14 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   saveText: { color: "#fff", fontSize: 15, fontWeight: "500" },
+  deleteBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    backgroundColor: "#dc2626",
+    borderRadius: 6,
+  },
+  deleteBtnText: { color: "#fff", fontSize: 15, fontWeight: "500" },
+
   pickerRow: {
     flexDirection: "row",
     alignItems: "center",
