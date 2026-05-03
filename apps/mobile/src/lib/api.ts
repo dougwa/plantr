@@ -214,6 +214,7 @@ export type PlantListItem = {
   qrCode: string;
   name: string | null;
   type: { id: string; name: string } | null;
+  species: string | null;
   gpsLat: number | null;
   gpsLng: number | null;
   locationShapeId: string | null;

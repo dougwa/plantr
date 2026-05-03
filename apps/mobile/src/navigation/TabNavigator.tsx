@@ -4,7 +4,7 @@ import { Pressable, StyleSheet, View } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import MapScreen from "../screens/MapScreen";
-import BrowseScreen from "../screens/BrowseScreen";
+import BrowseStack from "./BrowseStack";
 import ReportsScreen from "../screens/ReportsScreen";
 import SettingsScreen from "../screens/SettingsScreen";
 import type { RootStackParamList, TabParamList } from "./types";
@@ -56,7 +56,7 @@ export default function TabNavigator() {
       />
       <Tab.Screen
         name="Browse"
-        component={BrowseScreen}
+        component={BrowseStack}
         options={{
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="grid-outline" size={size} color={color} />

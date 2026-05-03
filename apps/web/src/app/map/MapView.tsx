@@ -73,15 +73,17 @@ export default function MapView({ plants, shapes, mapboxToken }: Props) {
   );
 
   const bounds = useMemo<LatLngBoundsExpression | null>(() => {
-    const points: [number, number][] = [];
-    for (const p of plantsWithGps) {
-      points.push([p.gpsLat as number, p.gpsLng as number]);
+    if (plantsWithGps.length > 0) {
+      return plantsWithGps.map(
+        (p) => [p.gpsLat as number, p.gpsLng as number] as [number, number],
+      );
     }
-    for (const s of shapes) {
-      points.push([s.centerLat, s.centerLng]);
+    if (shapes.length > 0) {
+      return shapes.map(
+        (s) => [s.centerLat, s.centerLng] as [number, number],
+      );
     }
-    if (points.length === 0) return null;
-    return points;
+    return null;
   }, [plantsWithGps, shapes]);
 
   const tileUrl = mapboxToken

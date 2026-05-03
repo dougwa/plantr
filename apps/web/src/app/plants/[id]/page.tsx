@@ -63,6 +63,7 @@ export default async function PlantPage({ params }: { params: Promise<{ id: stri
           <h1 className="text-2xl font-semibold text-neutral-900">
             {plant.name ?? <span className="text-neutral-400">Unnamed</span>}
           </h1>
+          <p className="mt-1 text-xs font-mono text-neutral-500">{plant.qrCode}</p>
           <dl className="mt-3 divide-y divide-neutral-100 text-sm">
             <Field label="Type" value={plant.type?.name ?? null} />
             <Field label="Species" value={plant.species} />

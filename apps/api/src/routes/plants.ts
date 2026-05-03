@@ -45,6 +45,7 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
         qrCode: p.qrCode,
         name: p.name,
         type: p.type ? { id: p.type.id, name: p.type.name } : null,
+        species: p.species,
         gpsLat: p.gpsLat,
         gpsLng: p.gpsLng,
         locationShapeId: p.locationShapeId,

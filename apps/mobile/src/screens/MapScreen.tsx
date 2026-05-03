@@ -23,7 +23,7 @@ import MapView, {
 } from "react-native-maps";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useNavigation } from "@react-navigation/native";
+import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useAuth } from "../contexts/AuthContext";
 import {
@@ -134,7 +134,7 @@ export default function MapScreen() {
   const [loading, setLoading] = useState(true);
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [picker, setPicker] = useState<PlantListItem[] | null>(null);
-  const fittedRef = useRef(false);
+  const lastFitCountRef = useRef(0);
 
   const token = state.status === "authed" ? state.token : null;
 
@@ -153,26 +153,49 @@ export default function MapScreen() {
     })();
   }, [reload]);
 
+  // Reload when the Map tab regains focus so newly-scanned plants show up.
+  useFocusEffect(
+    useCallback(() => {
+      reload();
+    }, [reload]),
+  );
+
   const plantsWithGps = useMemo(
     () => plants.filter((p) => p.gpsLat != null && p.gpsLng != null),
     [plants],
   );
 
-  // Auto-fit once after first load (when we have any anchors).
+  // Auto-fit on first load and whenever the set of plant pins grows
+  // (e.g. after a new scan). Don't refit on identical/shrinking sets so
+  // the user isn't yanked around while panning.
   useEffect(() => {
-    if (fittedRef.current || loading) return;
-    const points: LatLng[] = [
-      ...plantsWithGps.map((p) => ({
-        latitude: p.gpsLat as number,
-        longitude: p.gpsLng as number,
-      })),
-      ...shapes.map((s) => ({ latitude: s.centerLat, longitude: s.centerLng })),
-    ];
-    const region = fitRegion(points);
-    if (region && mapRef.current) {
-      mapRef.current.animateToRegion(region, 0);
-      fittedRef.current = true;
+    if (loading || !mapRef.current) return;
+    const count = plantsWithGps.length;
+    if (count > 0 && count <= lastFitCountRef.current) return;
+
+    const coords: LatLng[] =
+      count > 0
+        ? plantsWithGps.map((p) => ({
+            latitude: p.gpsLat as number,
+            longitude: p.gpsLng as number,
+          }))
+        : shapes.map((s) => ({
+            latitude: s.centerLat,
+            longitude: s.centerLng,
+          }));
+
+    if (coords.length === 0) return;
+
+    if (coords.length === 1) {
+      const region = fitRegion(coords);
+      if (region) mapRef.current.animateToRegion(region, 400);
+    } else {
+      mapRef.current.fitToCoordinates(coords, {
+        edgePadding: { top: 80, right: 60, bottom: 80, left: 60 },
+        animated: true,
+      });
     }
+    lastFitCountRef.current = count;
   }, [loading, plantsWithGps, shapes]);
 
   function chooseShapeKind(): Promise<"rectangle" | "ellipse" | null> {
@@ -401,11 +424,13 @@ export default function MapScreen() {
                     </View>
                     <View style={styles.pickerText}>
                       <Text style={styles.pickerName}>
-                        {p.name ?? p.qrCode}
+                        {p.name?.trim() || p.qrCode}
                       </Text>
-                      {p.type && (
-                        <Text style={styles.pickerType}>{p.type.name}</Text>
-                      )}
+                      <Text style={styles.pickerType}>
+                        {[p.name?.trim() ? p.qrCode : null, p.type?.name]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </Text>
                     </View>
                     <Ionicons name="chevron-forward" size={18} color="#a3a3a3" />
                   </TouchableOpacity>
