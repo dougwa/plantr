@@ -47,7 +47,8 @@
           "locationWhenInUsePermission": "PlantR records the GPS location of each scan."
         }
       ],
-      "expo-font"
+      "expo-font",
+      "expo-secure-store"
     ]
   }
 }
