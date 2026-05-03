@@ -1,5 +1,5 @@
 export const API_URL =
-  process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:4000";
+  process.env.EXPO_PUBLIC_API_URL ?? "https://plantr.kauseway.com/api";
 
 export type AuthUser = {
   id: string;
