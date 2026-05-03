@@ -24,7 +24,10 @@
         "READ_EXTERNAL_STORAGE"
       ]
     },
-    "platforms": ["ios", "android"],
+    "platforms": [
+      "ios",
+      "android"
+    ],
     "plugins": [
       [
         "expo-camera",
@@ -43,7 +46,8 @@
         {
           "locationWhenInUsePermission": "PlantR records the GPS location of each scan."
         }
-      ]
+      ],
+      "expo-font"
     ]
   }
 }
