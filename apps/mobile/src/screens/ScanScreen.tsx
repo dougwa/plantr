@@ -36,10 +36,11 @@ export default function ScanScreen() {
       const perm = await Location.requestForegroundPermissionsAsync();
       if (perm.status !== "granted") return {};
       const pos = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
+        accuracy: Location.Accuracy.Highest,
       });
       return { lat: pos.coords.latitude, lng: pos.coords.longitude };
-    } catch {
+    } catch (err) {
+      console.warn("getGps failed", err);
       return {};
     }
   }
@@ -55,12 +56,14 @@ export default function ScanScreen() {
       const gps = await getGps();
       const found = await getPlantByQr(state.token, code);
       if (found.ok) {
-        // Update GPS on existing plant if we have a new fix.
+        // Update GPS on existing plant if we have a new fix. Await so the
+        // detail screen reload sees the new coordinates.
         if (gps.lat !== undefined && gps.lng !== undefined) {
-          patchPlant(state.token, found.data.plant.id, {
+          const r = await patchPlant(state.token, found.data.plant.id, {
             gpsLat: gps.lat,
             gpsLng: gps.lng,
-          }).catch(() => {});
+          });
+          if (!r.ok) console.warn("GPS update failed", r.error);
         }
         nav.replace("PlantDetail", { plantId: found.data.plant.id });
         return;
@@ -126,22 +129,31 @@ export default function ScanScreen() {
         barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
         onBarcodeScanned={busy ? undefined : (e) => handleScan(e.data)}
       />
-      <SafeAreaView style={styles.overlay} edges={["top", "bottom"]}>
-        <View style={styles.headerBar}>
-          <Pressable onPress={() => nav.goBack()} hitSlop={12}>
+      {busy && (
+        <View style={styles.busyOverlay} pointerEvents="none">
+          <ActivityIndicator size="large" color="#fff" />
+          <Text style={styles.busyText}>Looking up plant…</Text>
+        </View>
+      )}
+      <SafeAreaView
+        style={styles.overlay}
+        edges={["top", "bottom"]}
+        pointerEvents="box-none"
+      >
+        <View style={styles.headerBar} pointerEvents="box-none">
+          <Pressable
+            onPress={() => nav.goBack()}
+            hitSlop={20}
+            style={styles.closeHit}
+          >
             <Ionicons name="close" size={32} color="#fff" />
           </Pressable>
         </View>
-        <View style={styles.frameWrap}>
+        <View style={styles.frameWrap} pointerEvents="none">
           <View style={styles.frame} />
           <Text style={styles.helpText}>Center the QR code in the box</Text>
         </View>
-        {busy && (
-          <View style={styles.busyOverlay}>
-            <ActivityIndicator size="large" color="#fff" />
-            <Text style={styles.busyText}>Looking up plant…</Text>
-          </View>
-        )}
+        <View />
       </SafeAreaView>
     </View>
   );
@@ -205,4 +217,11 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.6)",
   },
   busyText: { color: "#fff", marginTop: 12, fontSize: 14 },
+  closeHit: {
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: -10,
+  },
 });

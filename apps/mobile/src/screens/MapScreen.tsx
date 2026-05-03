@@ -38,6 +38,17 @@ import {
 import type { RootStackParamList } from "../navigation/types";
 
 const METERS_PER_DEGREE_LAT = 111_320;
+const CLUSTER_RADIUS_M = 5;
+
+function distanceMeters(
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number },
+) {
+  const dLat = (a.lat - b.lat) * METERS_PER_DEGREE_LAT;
+  const dLng =
+    (a.lng - b.lng) * METERS_PER_DEGREE_LAT * Math.cos((a.lat * Math.PI) / 180);
+  return Math.sqrt(dLat * dLat + dLng * dLng);
+}
 
 const COLOR_PALETTE = [
   "#16a34a",
@@ -122,6 +133,7 @@ export default function MapScreen() {
   const [shapes, setShapes] = useState<LocationShape[]>([]);
   const [loading, setLoading] = useState(true);
   const [editor, setEditor] = useState<EditorState | null>(null);
+  const [picker, setPicker] = useState<PlantListItem[] | null>(null);
   const fittedRef = useRef(false);
 
   const token = state.status === "authed" ? state.token : null;
@@ -216,6 +228,24 @@ export default function MapScreen() {
 
   function onMapLongPress(e: LongPressEvent) {
     addShapeAt(e.nativeEvent.coordinate);
+  }
+
+  function onMarkerPress(p: PlantListItem) {
+    const here = { lat: p.gpsLat as number, lng: p.gpsLng as number };
+    const nearby = plantsWithGps.filter((other) => {
+      const o = { lat: other.gpsLat as number, lng: other.gpsLng as number };
+      return distanceMeters(here, o) <= CLUSTER_RADIUS_M;
+    });
+    if (nearby.length > 1) {
+      setPicker(nearby);
+    } else {
+      nav.navigate("PlantDetail", { plantId: p.id });
+    }
+  }
+
+  function pickFromCluster(plantId: string) {
+    setPicker(null);
+    nav.navigate("PlantDetail", { plantId });
   }
 
   function openEditor(shape: LocationShape) {
@@ -318,7 +348,7 @@ export default function MapScreen() {
               latitude: p.gpsLat as number,
               longitude: p.gpsLng as number,
             }}
-            onPress={() => nav.navigate("PlantDetail", { plantId: p.id })}
+            onPress={() => onMarkerPress(p)}
             anchor={{ x: 0.5, y: 0.5 }}
           >
             <View style={styles.dotOuter}>
@@ -346,6 +376,50 @@ export default function MapScreen() {
           </Text>
         </View>
       </SafeAreaView>
+
+      <Modal
+        transparent
+        visible={picker !== null}
+        animationType="fade"
+        onRequestClose={() => setPicker(null)}
+      >
+        {picker && (
+          <Pressable style={styles.modalBackdrop} onPress={() => setPicker(null)}>
+            <Pressable style={styles.modalSheet} onPress={() => {}}>
+              <Text style={styles.modalTitle}>
+                {picker.length} plants here
+              </Text>
+              <ScrollView keyboardShouldPersistTaps="handled">
+                {picker.map((p) => (
+                  <TouchableOpacity
+                    key={p.id}
+                    style={styles.pickerRow}
+                    onPress={() => pickFromCluster(p.id)}
+                  >
+                    <View style={styles.pickerDot}>
+                      <View style={styles.dotInner} />
+                    </View>
+                    <View style={styles.pickerText}>
+                      <Text style={styles.pickerName}>
+                        {p.name ?? p.qrCode}
+                      </Text>
+                      {p.type && (
+                        <Text style={styles.pickerType}>{p.type.name}</Text>
+                      )}
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color="#a3a3a3" />
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+              <View style={styles.modalButtons}>
+                <TouchableOpacity onPress={() => setPicker(null)} style={styles.cancelBtn}>
+                  <Text style={styles.cancelText}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
+            </Pressable>
+          </Pressable>
+        )}
+      </Modal>
 
       <Modal
         transparent
@@ -553,4 +627,25 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   saveText: { color: "#fff", fontSize: 15, fontWeight: "500" },
+  pickerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#e5e5e5",
+    gap: 12,
+  },
+  pickerDot: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#d4d4d4",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pickerText: { flex: 1 },
+  pickerName: { fontSize: 15, color: "#171717", fontWeight: "500" },
+  pickerType: { fontSize: 12, color: "#737373", marginTop: 2 },
 });
