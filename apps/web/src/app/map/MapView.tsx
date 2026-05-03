@@ -105,29 +105,46 @@ export default function MapView({ plants, shapes, mapboxToken }: Props) {
         <TileLayer attribution={tileAttribution} url={tileUrl} maxZoom={22} maxNativeZoom={19} />
         <FitToData bounds={bounds} />
 
-        {shapes.map((s) =>
-          s.kind === "ellipse" ? (
-            <Polygon
-              key={s.id}
-              positions={ellipsePoints(s)}
-              pathOptions={{
-                color: s.color,
-                weight: 2,
-                fillOpacity: 0.2,
-              }}
-            />
-          ) : (
+        {/* Property shapes first so location shapes layer above them. */}
+        {shapes
+          .filter((s) => s.kind === "property")
+          .map((s) => (
             <Rectangle
               key={s.id}
               bounds={rectangleBounds(s)}
               pathOptions={{
                 color: s.color,
                 weight: 2,
-                fillOpacity: 0.2,
+                fillOpacity: 0,
+                dashArray: "8 6",
               }}
             />
-          ),
-        )}
+          ))}
+        {shapes
+          .filter((s) => s.kind !== "property")
+          .map((s) =>
+            s.kind === "ellipse" ? (
+              <Polygon
+                key={s.id}
+                positions={ellipsePoints(s)}
+                pathOptions={{
+                  color: s.color,
+                  weight: 2,
+                  fillOpacity: 0.2,
+                }}
+              />
+            ) : (
+              <Rectangle
+                key={s.id}
+                bounds={rectangleBounds(s)}
+                pathOptions={{
+                  color: s.color,
+                  weight: 2,
+                  fillOpacity: 0.2,
+                }}
+              />
+            ),
+          )}
 
         {plantsWithGps.map((p) => (
           <CircleMarker

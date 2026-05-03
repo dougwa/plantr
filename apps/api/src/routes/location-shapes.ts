@@ -5,7 +5,7 @@ import { pointInShape } from "../lib/geo.js";
 
 const createSchema = z.object({
   name: z.string().max(64).nullable().optional(),
-  kind: z.enum(["rectangle", "ellipse"]),
+  kind: z.enum(["rectangle", "ellipse", "property"]),
   color: z
     .string()
     .regex(/^#[0-9a-fA-F]{6}$/, "color must be #rrggbb"),

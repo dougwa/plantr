@@ -16,6 +16,10 @@ export function pointInShape(
     "kind" | "centerLat" | "centerLng" | "widthMeters" | "heightMeters" | "rotationDegrees"
   >,
 ): boolean {
+  // Property shapes are property-line markers, not plant location groups —
+  // they never claim plants for assignment.
+  if (shape.kind === "property") return false;
+
   let { dx, dy } = toMetersOffset(lat, lng, shape.centerLat, shape.centerLng);
 
   if (shape.rotationDegrees !== 0) {

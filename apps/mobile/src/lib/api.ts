@@ -230,7 +230,7 @@ export async function listPlants(token: string) {
 export type LocationShape = {
   id: string;
   name: string | null;
-  kind: "rectangle" | "ellipse";
+  kind: "rectangle" | "ellipse" | "property";
   color: string;
   centerLat: number;
   centerLng: number;
@@ -253,7 +253,7 @@ export async function createLocationShape(
   token: string,
   body: {
     name?: string | null;
-    kind: "rectangle" | "ellipse";
+    kind: "rectangle" | "ellipse" | "property";
     color: string;
     centerLat: number;
     centerLng: number;

@@ -60,7 +60,7 @@ export type PlantListItem = {
 export type LocationShape = {
   id: string;
   name: string | null;
-  kind: "rectangle" | "ellipse";
+  kind: "rectangle" | "ellipse" | "property";
   color: string;
   centerLat: number;
   centerLng: number;

@@ -316,22 +316,34 @@ export default function MapScreen() {
     lastFitCountRef.current = count;
   }, [loading, plantsWithGps, shapes]);
 
-  function chooseShapeKind(): Promise<"rectangle" | "ellipse" | null> {
+  function chooseShapeKind(): Promise<
+    "rectangle" | "ellipse" | "property" | null
+  > {
     return new Promise((resolve) => {
       if (Platform.OS === "ios") {
         ActionSheetIOS.showActionSheetWithOptions(
           {
-            options: ["Cancel", "Rectangle", "Ellipse"],
+            options: ["Cancel", "Rectangle", "Ellipse", "Property"],
             cancelButtonIndex: 0,
             title: "Add a location",
           },
-          (i) => resolve(i === 1 ? "rectangle" : i === 2 ? "ellipse" : null),
+          (i) =>
+            resolve(
+              i === 1
+                ? "rectangle"
+                : i === 2
+                  ? "ellipse"
+                  : i === 3
+                    ? "property"
+                    : null,
+            ),
         );
       } else {
         Alert.alert("Add a location", undefined, [
           { text: "Cancel", style: "cancel", onPress: () => resolve(null) },
           { text: "Rectangle", onPress: () => resolve("rectangle") },
           { text: "Ellipse", onPress: () => resolve("ellipse") },
+          { text: "Property", onPress: () => resolve("property") },
         ]);
       }
     });
@@ -346,13 +358,14 @@ export default function MapScreen() {
     }
     const kind = await chooseShapeKind();
     if (!kind) return;
+    const isProperty = kind === "property";
     const r = await createLocationShape(token, {
       kind,
       color: COLOR_PALETTE[shapes.length % COLOR_PALETTE.length] ?? COLOR_PALETTE[0]!,
       centerLat: camera.center.latitude,
       centerLng: camera.center.longitude,
-      widthMeters: 8,
-      heightMeters: 8,
+      widthMeters: isProperty ? 40 : 8,
+      heightMeters: isProperty ? 40 : 8,
       name: null,
     });
     if (!r.ok) {
@@ -687,17 +700,34 @@ export default function MapScreen() {
         showsUserLocation
         {...(initialCamera ? { initialCamera } : {})}
       >
-        {shapes.map((s) => (
-          <Polygon
-            key={s.id}
-            coordinates={s.kind === "ellipse" ? ellipsePoints(s) : rectangleCorners(s)}
-            strokeColor={s.color}
-            fillColor={`${s.color}33`}
-            strokeWidth={2}
-            tappable
-            onPress={() => onShapeTap(s)}
-          />
-        ))}
+        {/* Property shapes first so location shapes render above and win taps. */}
+        {shapes
+          .filter((s) => s.kind === "property")
+          .map((s) => (
+            <Polygon
+              key={s.id}
+              coordinates={rectangleCorners(s)}
+              strokeColor={s.color}
+              fillColor="rgba(0,0,0,0)"
+              strokeWidth={2}
+              lineDashPattern={[8, 6]}
+              tappable
+              onPress={() => onShapeTap(s)}
+            />
+          ))}
+        {shapes
+          .filter((s) => s.kind !== "property")
+          .map((s) => (
+            <Polygon
+              key={s.id}
+              coordinates={s.kind === "ellipse" ? ellipsePoints(s) : rectangleCorners(s)}
+              strokeColor={s.color}
+              fillColor={`${s.color}33`}
+              strokeWidth={2}
+              tappable
+              onPress={() => onShapeTap(s)}
+            />
+          ))}
         {plantsWithGps.map((p) => (
           <Marker
             key={p.id}
