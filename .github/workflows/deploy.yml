@@ -1,0 +1,38 @@
+name: Deploy to plantr.kauseway.com
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.PLANTR_PROD_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # Pin the droplet's host key to prevent MITM.
+          cat <<'EOF' >> ~/.ssh/known_hosts
+          plantr.kauseway.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM++8fgDbcFFnTSM5YgM5CRRWzwL8/2AJOO9WnPzOPsb
+          EOF
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Run deploy on droplet
+        run: |
+          # Authorized_keys forces this key to run /opt/plantr/deploy.sh; any
+          # ssh "command" we pass is ignored.
+          ssh -T -i ~/.ssh/id_ed25519 \
+              -o ConnectTimeout=15 \
+              -o ServerAliveInterval=30 \
+              root@plantr.kauseway.com
