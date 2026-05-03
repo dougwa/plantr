@@ -3,6 +3,11 @@ name: Deploy to plantr.kauseway.com
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'apps/mobile/**'
+      - '**/*.md'
+      - '.gitignore'
+      - '.editorconfig'
   workflow_dispatch:
 
 concurrency:
