@@ -12,7 +12,7 @@ export default function BrowseStack() {
       <Stack.Screen
         name="BrowseHome"
         component={BrowseHomeScreen}
-        options={{ headerShown: false }}
+        options={{ headerShown: false, title: "Browse" }}
       />
       <Stack.Screen name="BrowseEntries" component={BrowseEntriesScreen} />
       <Stack.Screen name="PlantList" component={PlantListScreen} />

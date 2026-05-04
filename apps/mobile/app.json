@@ -9,19 +9,22 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.kauseway.plantr",
+      "buildNumber": "0.0.1",
       "infoPlist": {
         "NSCameraUsageDescription": "PlantR uses the camera to scan plant QR codes and to take plant photos.",
         "NSLocationWhenInUseUsageDescription": "PlantR records the GPS location of each scan so plants can be shown on the property map.",
-        "NSPhotoLibraryUsageDescription": "PlantR can pull plant photos from your library."
+        "NSPhotoLibraryUsageDescription": "PlantR can pull plant photos from your library.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
       "package": "com.kauseway.plantr",
       "permissions": [
-        "CAMERA",
-        "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION",
-        "READ_EXTERNAL_STORAGE"
+        "android.permission.CAMERA",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "platforms": [
@@ -49,6 +52,11 @@
       ],
       "expo-font",
       "expo-secure-store"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "9373a56a-b421-4ec1-86c0-4dc528d0683c"
+      }
+    }
   }
 }

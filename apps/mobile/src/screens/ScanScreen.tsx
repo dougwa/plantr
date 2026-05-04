@@ -15,7 +15,10 @@ import {
 } from "../lib/scannerTypes";
 import * as Location from "expo-location";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { SafeAreaView } from "react-native-safe-area-context";
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useAuth } from "../contexts/AuthContext";
@@ -25,6 +28,7 @@ import type { RootStackParamList } from "../navigation/types";
 export default function ScanScreen() {
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { state } = useAuth();
+  const insets = useSafeAreaInsets();
   const [permission, requestPermission] = useCameraPermissions();
   const [busy, setBusy] = useState(false);
   const [barcodeTypes, setBarcodeTypes] = useState<BarcodeType[]>([
@@ -147,9 +151,11 @@ export default function ScanScreen() {
           <Text style={styles.busyText}>Looking up plant…</Text>
         </View>
       )}
-      <SafeAreaView
-        style={styles.overlay}
-        edges={["top", "bottom"]}
+      <View
+        style={[
+          styles.overlay,
+          { paddingTop: insets.top, paddingBottom: insets.bottom },
+        ]}
         pointerEvents="box-none"
       >
         <View style={styles.headerBar} pointerEvents="box-none">
@@ -166,7 +172,7 @@ export default function ScanScreen() {
           <Text style={styles.helpText}>Center the code in the box</Text>
         </View>
         <View />
-      </SafeAreaView>
+      </View>
     </View>
   );
 }
@@ -202,7 +208,7 @@ const styles = StyleSheet.create({
   headerBar: {
     flexDirection: "row",
     paddingHorizontal: 16,
-    paddingTop: 8,
+    paddingTop: 16,
   },
   frameWrap: {
     alignItems: "center",
