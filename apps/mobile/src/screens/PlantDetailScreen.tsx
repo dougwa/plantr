@@ -3,6 +3,7 @@ import {
   ActionSheetIOS,
   ActivityIndicator,
   Alert,
+  Animated,
   FlatList,
   Modal,
   Platform,
@@ -17,15 +18,18 @@ import {
 } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { SafeAreaView } from "react-native-safe-area-context";
+import Swipeable from "react-native-gesture-handler/Swipeable";
 import * as ImagePicker from "expo-image-picker";
 import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useAuth } from "../contexts/AuthContext";
 import {
+  deleteAction,
   deletePhoto,
   deletePlant,
   getPlant,
   listPlantTypes,
+  patchAction,
   patchPlant,
   recordAction,
   resetPlant,
@@ -57,11 +61,11 @@ export default function PlantDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [typePickerOpen, setTypePickerOpen] = useState(false);
-  const [actionInput, setActionInput] = useState<{
-    kind: ActionKind;
-    label: string;
-    notes: string;
-  } | null>(null);
+  const [actionInput, setActionInput] = useState<
+    | { mode: "create"; kind: ActionKind; label: string; notes: string }
+    | { mode: "edit"; actionId: string; label: string; notes: string }
+    | null
+  >(null);
 
   const token = state.status === "authed" ? state.token : null;
 
@@ -214,16 +218,45 @@ export default function PlantDetailScreen() {
 
   async function submitAction() {
     if (!token || !plant || !actionInput) return;
-    const r = await recordAction(token, plant.id, {
-      kind: actionInput.kind,
-      notes: actionInput.notes.trim() || undefined,
-    });
-    if (!r.ok) {
-      Alert.alert("Failed", r.error);
-      return;
+    if (actionInput.mode === "create") {
+      const r = await recordAction(token, plant.id, {
+        kind: actionInput.kind,
+        notes: actionInput.notes.trim() || undefined,
+      });
+      if (!r.ok) {
+        Alert.alert("Failed", r.error);
+        return;
+      }
+    } else {
+      const r = await patchAction(token, actionInput.actionId, {
+        notes: actionInput.notes.trim() || null,
+      });
+      if (!r.ok) {
+        Alert.alert("Failed", r.error);
+        return;
+      }
     }
     setActionInput(null);
     await reload();
+  }
+
+  async function removeAction(actionId: string) {
+    if (!token) return;
+    const r = await deleteAction(token, actionId);
+    if (!r.ok) {
+      Alert.alert("Delete failed", r.error);
+    }
+    await reload();
+  }
+
+  function openEditAction(action: PublicAction) {
+    const label = action.kind.charAt(0).toUpperCase() + action.kind.slice(1);
+    setActionInput({
+      mode: "edit",
+      actionId: action.id,
+      label,
+      notes: action.notes ?? "",
+    });
   }
 
   function openPlantMenu() {
@@ -402,7 +435,9 @@ export default function PlantDetailScreen() {
               <TouchableOpacity
                 key={kind}
                 style={styles.actionButton}
-                onPress={() => setActionInput({ kind, label, notes: "" })}
+                onPress={() =>
+                  setActionInput({ mode: "create", kind, label, notes: "" })
+                }
               >
                 <Ionicons name={icon} size={22} color="#171717" />
                 <Text style={styles.actionLabel}>{label}</Text>
@@ -413,7 +448,14 @@ export default function PlantDetailScreen() {
             {plant.actions.length === 0 ? (
               <Text style={styles.emptyText}>No actions yet.</Text>
             ) : (
-              plant.actions.map((a) => <ActionRow key={a.id} action={a} />)
+              plant.actions.map((a) => (
+                <ActionRow
+                  key={a.id}
+                  action={a}
+                  onEdit={() => openEditAction(a)}
+                  onDelete={() => removeAction(a.id)}
+                />
+              ))
             )}
           </View>
         </View>
@@ -459,13 +501,19 @@ export default function PlantDetailScreen() {
         {actionInput && (
           <Pressable style={styles.modalBackdrop} onPress={() => setActionInput(null)}>
             <Pressable style={styles.modalSheet} onPress={() => {}}>
-              <Text style={styles.modalTitle}>Record {actionInput.label.toLowerCase()}</Text>
+              <Text style={styles.modalTitle}>
+                {actionInput.mode === "create" ? "Record " : "Edit "}
+                {actionInput.label.toLowerCase()}
+                {actionInput.mode === "edit" ? " notes" : ""}
+              </Text>
               <TextInput
                 style={styles.notesInput}
                 placeholder="Notes (optional)"
                 multiline
                 value={actionInput.notes}
-                onChangeText={(t) => setActionInput({ ...actionInput, notes: t })}
+                onChangeText={(t) =>
+                  setActionInput((cur) => (cur ? { ...cur, notes: t } : cur))
+                }
               />
               <View style={styles.modalButtons}>
                 <TouchableOpacity onPress={() => setActionInput(null)} style={styles.modalCancel}>
@@ -547,19 +595,64 @@ function EditableText({
   );
 }
 
-function ActionRow({ action }: { action: PublicAction }) {
+function ActionRow({
+  action,
+  onEdit,
+  onDelete,
+}: {
+  action: PublicAction;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
   const date = new Date(action.takenAt);
   const formatted = `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
   const label = action.kind.charAt(0).toUpperCase() + action.kind.slice(1);
   return (
-    <View style={styles.actionRowItem}>
-      <View style={styles.actionRowHeader}>
-        <Text style={styles.actionRowKind}>{label}</Text>
-        <Text style={styles.actionRowDate}>{formatted}</Text>
-      </View>
-      {action.notes ? <Text style={styles.actionRowNotes}>{action.notes}</Text> : null}
-      <Text style={styles.actionRowMeta}>by {action.createdBy.username}</Text>
-    </View>
+    <Swipeable
+      renderRightActions={(_progress, dragX) => {
+        const willDelete = dragX.interpolate({
+          inputRange: [-200, -160],
+          outputRange: [1, 0],
+          extrapolate: "clamp",
+        });
+        return (
+          <View style={styles.actionDeleteSwipe} pointerEvents="none">
+            <Ionicons name="trash-outline" size={22} color="#fff" />
+            <Animated.Text
+              style={[styles.actionDeleteSwipeText, { opacity: willDelete }]}
+            >
+              Release
+            </Animated.Text>
+          </View>
+        );
+      }}
+      rightThreshold={160}
+      overshootRight={false}
+      onSwipeableOpen={(direction) => {
+        if (direction === "right") onDelete();
+      }}
+    >
+      <Pressable
+        onPress={onEdit}
+        style={({ pressed }) => [
+          styles.actionRowItem,
+          pressed && { backgroundColor: "#f5f5f5" },
+        ]}
+      >
+        <View style={styles.actionRowHeader}>
+          <Text style={styles.actionRowKind}>{label}</Text>
+          <Text style={styles.actionRowDate}>{formatted}</Text>
+        </View>
+        {action.notes ? (
+          <Text style={styles.actionRowNotes}>{action.notes}</Text>
+        ) : (
+          <Text style={[styles.actionRowNotes, styles.actionRowNotesEmpty]}>
+            Tap to add notes
+          </Text>
+        )}
+        <Text style={styles.actionRowMeta}>by {action.createdBy.username}</Text>
+      </Pressable>
+    </Swipeable>
   );
 }
 
@@ -667,7 +760,10 @@ const styles = StyleSheet.create({
 
   actionLog: { paddingTop: 8, paddingBottom: 12 },
   actionRowItem: {
+    backgroundColor: "#fff",
     paddingVertical: 10,
+    paddingHorizontal: 16,
+    marginHorizontal: -16, // bleed to section edges so swipe-delete fills
     borderTopWidth: StyleSheet.hairlineWidth,
     borderColor: "#f5f5f5",
   },
@@ -679,7 +775,18 @@ const styles = StyleSheet.create({
   actionRowKind: { fontSize: 15, fontWeight: "500", color: "#171717" },
   actionRowDate: { fontSize: 12, color: "#737373" },
   actionRowNotes: { marginTop: 4, fontSize: 14, color: "#404040" },
+  actionRowNotesEmpty: { color: "#a3a3a3", fontStyle: "italic" },
   actionRowMeta: { marginTop: 4, fontSize: 12, color: "#a3a3a3" },
+  actionDeleteSwipe: {
+    backgroundColor: "#dc2626",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+    paddingHorizontal: 24,
+    gap: 8,
+    minWidth: 200,
+  },
+  actionDeleteSwipeText: { color: "#fff", fontSize: 12, fontWeight: "500" },
   emptyText: { color: "#a3a3a3", fontSize: 14, paddingVertical: 8 },
 
   modalBackdrop: {

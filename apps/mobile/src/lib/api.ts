@@ -221,6 +221,25 @@ export async function recordAction(
   });
 }
 
+export async function patchAction(
+  token: string,
+  id: string,
+  body: { notes: string | null },
+) {
+  return request<{ action: PublicAction }>(`/actions/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+    token,
+  });
+}
+
+export async function deleteAction(token: string, id: string) {
+  return request<{ ok: boolean }>(`/actions/${id}`, {
+    method: "DELETE",
+    token,
+  });
+}
+
 // --- plants list (lightweight) ---------------------------------------------
 
 export type PlantListItem = {
