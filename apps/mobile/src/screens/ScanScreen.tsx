@@ -8,6 +8,11 @@ import {
   View,
 } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
+import {
+  ALL_BARCODE_TYPES,
+  loadEnabledBarcodeTypes,
+  type BarcodeType,
+} from "../lib/scannerTypes";
 import * as Location from "expo-location";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -22,6 +27,9 @@ export default function ScanScreen() {
   const { state } = useAuth();
   const [permission, requestPermission] = useCameraPermissions();
   const [busy, setBusy] = useState(false);
+  const [barcodeTypes, setBarcodeTypes] = useState<BarcodeType[]>([
+    ...ALL_BARCODE_TYPES,
+  ]);
   const lastCodeRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -30,6 +38,10 @@ export default function ScanScreen() {
       requestPermission();
     }
   }, [permission, requestPermission]);
+
+  useEffect(() => {
+    loadEnabledBarcodeTypes().then(setBarcodeTypes);
+  }, []);
 
   async function getGps(): Promise<{ lat?: number; lng?: number }> {
     try {
@@ -126,7 +138,7 @@ export default function ScanScreen() {
       <CameraView
         style={StyleSheet.absoluteFill}
         facing="back"
-        barcodeScannerSettings={{ barcodeTypes: ["qr", "code128"] }}
+        barcodeScannerSettings={{ barcodeTypes }}
         onBarcodeScanned={busy ? undefined : (e) => handleScan(e.data)}
       />
       {busy && (

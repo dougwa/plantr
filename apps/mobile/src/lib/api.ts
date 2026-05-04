@@ -165,6 +165,20 @@ export async function patchPlant(
   });
 }
 
+export async function resetPlant(token: string, id: string) {
+  return request<{ plant: PublicPlant }>(`/plants/${id}/reset`, {
+    method: "POST",
+    token,
+  });
+}
+
+export async function deletePlant(token: string, id: string) {
+  return request<{ ok: boolean }>(`/plants/${id}`, {
+    method: "DELETE",
+    token,
+  });
+}
+
 // --- photos -----------------------------------------------------------------
 
 export async function uploadPhoto(token: string, plantId: string, fileUri: string) {

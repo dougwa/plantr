@@ -2,9 +2,12 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { prisma } from "../db.js";
 import { pointInShape } from "../lib/geo.js";
+import { deletePhotoFiles } from "../lib/photos.js";
 import { PLANT_INCLUDE, publicPlant } from "../lib/serializers.js";
 
-const qrCodeSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/);
+// Accept any code that's letters, digits, or common ID separators. Avoids
+// "/" so by-qr URL routing stays unambiguous.
+const qrCodeSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9._-]+$/);
 
 const createSchema = z.object({
   qrCode: qrCodeSchema,
@@ -155,6 +158,89 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
         });
       if (!updated) return reply.code(404).send({ error: "not_found" });
       return { plant: publicPlant(updated) };
+    },
+  );
+
+  // Reset clears every editable field on a plant (and its photos/actions)
+  // so the QR code can be reused for a different physical plant. The plant
+  // row and its qrCode stay; cover photo, photos, actions, name, type,
+  // species, description, notes, GPS, location, and plantNetData are wiped.
+  app.post<{ Params: { id: string } }>(
+    "/plants/:id/reset",
+    { onRequest: [app.requireAuth] },
+    async (req, reply) => {
+      const id = req.params.id;
+      const plant = await prisma.plant.findUnique({
+        where: { id },
+        include: { photos: true },
+      });
+      if (!plant) return reply.code(404).send({ error: "not_found" });
+
+      // Drop the cover-photo back-reference before deleting photos so the
+      // unique relation doesn't block the deletes.
+      await prisma.plant.update({
+        where: { id },
+        data: { coverPhotoId: null },
+      });
+      await prisma.action.deleteMany({ where: { plantId: id } });
+      await prisma.photo.deleteMany({ where: { plantId: id } });
+      await Promise.all(
+        plant.photos.map((p) =>
+          deletePhotoFiles({
+            originalPath: p.originalPath,
+            thumbnailPath: p.thumbnailPath,
+            coverPath: p.coverPath,
+          }),
+        ),
+      );
+      const reset = await prisma.plant.update({
+        where: { id },
+        data: {
+          name: null,
+          typeId: null,
+          species: null,
+          description: null,
+          notes: null,
+          gpsLat: null,
+          gpsLng: null,
+          plantNetData: undefined,
+          locationShapeId: null,
+        },
+        include: PLANT_INCLUDE,
+      });
+      return { plant: publicPlant(reset) };
+    },
+  );
+
+  // Delete removes the plant entirely. Photos and actions cascade via the
+  // schema's onDelete: Cascade; we still need to remove the on-disk files.
+  app.delete<{ Params: { id: string } }>(
+    "/plants/:id",
+    { onRequest: [app.requireAuth] },
+    async (req, reply) => {
+      const id = req.params.id;
+      const plant = await prisma.plant.findUnique({
+        where: { id },
+        include: { photos: true },
+      });
+      if (!plant) return reply.code(404).send({ error: "not_found" });
+
+      // Break cover-photo back-reference before deleting plant.
+      await prisma.plant.update({
+        where: { id },
+        data: { coverPhotoId: null },
+      });
+      await prisma.plant.delete({ where: { id } });
+      await Promise.all(
+        plant.photos.map((p) =>
+          deletePhotoFiles({
+            originalPath: p.originalPath,
+            thumbnailPath: p.thumbnailPath,
+            coverPath: p.coverPath,
+          }),
+        ),
+      );
+      return { ok: true };
     },
   );
 };

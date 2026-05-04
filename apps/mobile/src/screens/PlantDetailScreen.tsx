@@ -23,10 +23,12 @@ import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useAuth } from "../contexts/AuthContext";
 import {
   deletePhoto,
+  deletePlant,
   getPlant,
   listPlantTypes,
   patchPlant,
   recordAction,
+  resetPlant,
   setCoverPhoto,
   uploadPhoto,
   type ActionKind,
@@ -224,6 +226,70 @@ export default function PlantDetailScreen() {
     await reload();
   }
 
+  function openPlantMenu() {
+    if (!plant) return;
+    const code = plant.qrCode;
+    const onReset = () =>
+      Alert.alert(
+        "Reset plant?",
+        `All photos, actions, name, type, GPS, and notes for ${code} will be erased. The QR code stays available for a new plant. This cannot be undone.`,
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Reset", style: "destructive", onPress: doReset },
+        ],
+      );
+    const onDelete = () =>
+      Alert.alert(
+        "Delete plant?",
+        `${code} will be permanently removed along with its photos and actions. The QR code can be scanned again to create a fresh entry. This cannot be undone.`,
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Delete", style: "destructive", onPress: doDelete },
+        ],
+      );
+
+    if (Platform.OS === "ios") {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options: ["Cancel", "Reset plant", "Delete plant"],
+          cancelButtonIndex: 0,
+          destructiveButtonIndex: 2,
+          title: code,
+        },
+        (i) => {
+          if (i === 1) onReset();
+          else if (i === 2) onDelete();
+        },
+      );
+    } else {
+      Alert.alert(code, undefined, [
+        { text: "Cancel", style: "cancel" },
+        { text: "Reset plant", onPress: onReset },
+        { text: "Delete plant", style: "destructive", onPress: onDelete },
+      ]);
+    }
+  }
+
+  async function doReset() {
+    if (!token || !plant) return;
+    const r = await resetPlant(token, plant.id);
+    if (!r.ok) {
+      Alert.alert("Reset failed", r.error);
+      return;
+    }
+    setPlant(r.data.plant);
+  }
+
+  async function doDelete() {
+    if (!token || !plant) return;
+    const r = await deletePlant(token, plant.id);
+    if (!r.ok) {
+      Alert.alert("Delete failed", r.error);
+      return;
+    }
+    nav.goBack();
+  }
+
   if (loading || !plant) {
     return (
       <View style={styles.loading}>
@@ -244,7 +310,9 @@ export default function PlantDetailScreen() {
           <Text style={styles.qrCode} numberOfLines={1}>
             {plant.qrCode}
           </Text>
-          <View style={{ width: 28 }} />
+          <Pressable onPress={openPlantMenu} hitSlop={12}>
+            <Ionicons name="ellipsis-horizontal" size={24} color="#171717" />
+          </Pressable>
         </View>
       </SafeAreaView>
 
