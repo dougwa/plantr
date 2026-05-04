@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActionSheetIOS,
   ActivityIndicator,
@@ -15,9 +15,17 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+  GestureHandlerRootView,
+  PanGestureHandler,
+  State,
+  type PanGestureHandlerGestureEvent,
+  type PanGestureHandlerStateChangeEvent,
+} from "react-native-gesture-handler";
 import Swipeable from "react-native-gesture-handler/Swipeable";
 import * as ImagePicker from "expo-image-picker";
 import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
@@ -66,6 +74,52 @@ export default function PlantDetailScreen() {
     | { mode: "edit"; actionId: string; label: string; notes: string }
     | null
   >(null);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const { width: winW, height: winH } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const dragY = useRef(new Animated.Value(0)).current;
+  const closeLightbox = useCallback(() => {
+    dragY.setValue(0);
+    setLightboxIndex(null);
+  }, [dragY]);
+  const onLightboxPan = useCallback(
+    (e: PanGestureHandlerGestureEvent) => {
+      const dy = e.nativeEvent.translationY;
+      dragY.setValue(dy > 0 ? dy : 0);
+    },
+    [dragY],
+  );
+  const onLightboxPanEnd = useCallback(
+    (e: PanGestureHandlerStateChangeEvent) => {
+      if (
+        e.nativeEvent.state !== State.END &&
+        e.nativeEvent.state !== State.CANCELLED &&
+        e.nativeEvent.state !== State.FAILED
+      ) {
+        return;
+      }
+      const dy = e.nativeEvent.translationY;
+      const vy = e.nativeEvent.velocityY;
+      if (dy > 120 || vy > 600) {
+        Animated.timing(dragY, {
+          toValue: winH,
+          duration: 200,
+          useNativeDriver: false,
+        }).start(closeLightbox);
+      } else {
+        Animated.spring(dragY, {
+          toValue: 0,
+          useNativeDriver: false,
+        }).start();
+      }
+    },
+    [dragY, winH, closeLightbox],
+  );
+  const backdropOpacity = dragY.interpolate({
+    inputRange: [0, 300],
+    outputRange: [1, 0.4],
+    extrapolate: "clamp",
+  });
 
   const token = state.status === "authed" ? state.token : null;
 
@@ -355,11 +409,18 @@ export default function PlantDetailScreen() {
       >
         <View style={styles.coverWrap}>
           {plant.coverPhoto ? (
-            <AuthImage
-              path={plant.coverPhoto.urls.cover}
-              style={styles.cover}
-              resizeMode="cover"
-            />
+            <Pressable
+              onPress={() => {
+                const idx = plant.photos.findIndex((p) => p.id === plant.coverPhoto!.id);
+                setLightboxIndex(idx >= 0 ? idx : 0);
+              }}
+            >
+              <AuthImage
+                path={plant.coverPhoto.urls.cover}
+                style={styles.cover}
+                resizeMode="cover"
+              />
+            </Pressable>
           ) : (
             <View style={[styles.cover, styles.coverEmpty]}>
               <Ionicons name="leaf-outline" size={64} color="#a3a3a3" />
@@ -407,9 +468,10 @@ export default function PlantDetailScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Photos</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {plant.photos.map((p) => (
+            {plant.photos.map((p, i) => (
               <Pressable
                 key={p.id}
+                onPress={() => setLightboxIndex(i)}
                 onLongPress={() => showPhotoMenu(p.id, p.id === plant.coverPhoto?.id)}
                 delayLongPress={400}
                 style={styles.thumbWrap}
@@ -460,6 +522,73 @@ export default function PlantDetailScreen() {
           </View>
         </View>
       </ScrollView>
+
+      <Modal
+        visible={lightboxIndex !== null}
+        animationType="fade"
+        statusBarTranslucent
+        onRequestClose={closeLightbox}
+      >
+        <GestureHandlerRootView style={styles.lightboxRoot}>
+          <Animated.View
+            style={[styles.lightboxBackdrop, { opacity: backdropOpacity }]}
+            pointerEvents="none"
+          />
+          <PanGestureHandler
+            activeOffsetY={[-9999, 12]}
+            failOffsetX={[-12, 12]}
+            onGestureEvent={onLightboxPan}
+            onHandlerStateChange={onLightboxPanEnd}
+          >
+            <Animated.View
+              style={[styles.lightboxStage, { transform: [{ translateY: dragY }] }]}
+            >
+              <FlatList
+                data={plant.photos}
+                horizontal
+                pagingEnabled
+                showsHorizontalScrollIndicator={false}
+                initialScrollIndex={lightboxIndex ?? 0}
+                getItemLayout={(_, index) => ({
+                  length: winW,
+                  offset: winW * index,
+                  index,
+                })}
+                keyExtractor={(p) => p.id}
+                renderItem={({ item }) => (
+                  <View style={{ width: winW, height: winH, alignItems: "center", justifyContent: "center" }}>
+                    <AuthImage
+                      path={item.urls.cover}
+                      style={{ width: winW, height: winH }}
+                      resizeMode="contain"
+                    />
+                  </View>
+                )}
+                onMomentumScrollEnd={(e) => {
+                  const idx = Math.round(e.nativeEvent.contentOffset.x / winW);
+                  setLightboxIndex((cur) => (cur === null ? null : idx));
+                }}
+              />
+            </Animated.View>
+          </PanGestureHandler>
+          <View
+            style={[styles.lightboxBar, { paddingTop: insets.top }]}
+            pointerEvents="box-none"
+          >
+            <View style={styles.lightboxBarRow} pointerEvents="box-none">
+              <Pressable onPress={closeLightbox} hitSlop={20} style={styles.lightboxCloseHit}>
+                <Ionicons name="close" size={32} color="#fff" />
+              </Pressable>
+              {plant.photos.length > 1 && (
+                <Text style={styles.lightboxCount}>
+                  {(lightboxIndex ?? 0) + 1} / {plant.photos.length}
+                </Text>
+              )}
+              <View style={{ width: 44 }} />
+            </View>
+          </View>
+        </GestureHandlerRootView>
+      </Modal>
 
       <Modal
         transparent
@@ -834,4 +963,27 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   modalSaveText: { color: "#fff", fontSize: 15, fontWeight: "500" },
+
+  lightboxRoot: { flex: 1, backgroundColor: "#000" },
+  lightboxBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "#000",
+  },
+  lightboxStage: { flex: 1 },
+  lightboxBar: { position: "absolute", top: 0, left: 0, right: 0 },
+  lightboxBarRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+  },
+  lightboxCloseHit: {
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    marginLeft: -6,
+  },
+  lightboxCount: { color: "#fff", fontSize: 14, fontWeight: "500" },
 });

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Alert,
   Pressable,
@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
+import { useFocusEffect } from "@react-navigation/native";
 import { useAuth } from "../contexts/AuthContext";
 import {
   ALL_BARCODE_TYPES,
@@ -18,6 +19,7 @@ import {
   saveEnabledBarcodeTypes,
   type BarcodeType,
 } from "../lib/scannerTypes";
+import { clearImageCache, getImageCacheBytes } from "../lib/imageCache";
 
 export default function SettingsScreen() {
   const { state, signOut } = useAuth();
@@ -41,6 +43,8 @@ export default function SettingsScreen() {
         </View>
 
         <ScannerSection />
+
+        <StorageSection />
 
         <TouchableOpacity style={styles.button} onPress={confirmSignOut}>
           <Text style={styles.buttonText}>Sign out</Text>
@@ -105,6 +109,90 @@ function ScannerSection() {
   );
 }
 
+function StorageSection() {
+  const [bytes, setBytes] = useState<number | null>(null);
+  const [working, setWorking] = useState(false);
+
+  const refresh = useCallback(async () => {
+    try {
+      const n = await getImageCacheBytes();
+      setBytes(n);
+    } catch (err) {
+      console.warn("getImageCacheBytes failed", err);
+      setBytes(0);
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      refresh();
+    }, [refresh]),
+  );
+
+  function confirmClear() {
+    Alert.alert(
+      "Clear photo cache?",
+      "Cached photos will be re-downloaded as you view them.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Clear",
+          style: "destructive",
+          onPress: async () => {
+            setWorking(true);
+            try {
+              await clearImageCache();
+              await refresh();
+            } catch (err) {
+              Alert.alert("Clear failed", String(err));
+            } finally {
+              setWorking(false);
+            }
+          },
+        },
+      ],
+    );
+  }
+
+  const empty = bytes === 0;
+  const disabled = working || bytes === null || empty;
+
+  return (
+    <View style={styles.section}>
+      <Text style={styles.sectionTitle}>Storage</Text>
+      <Text style={styles.sectionHint}>
+        Photos are cached on your device after first view.
+      </Text>
+      <View style={styles.toggleRow}>
+        <Text style={styles.toggleLabel}>Photo cache</Text>
+        <Text style={styles.value}>
+          {bytes === null ? "…" : formatBytes(bytes)}
+        </Text>
+      </View>
+      <Pressable
+        onPress={confirmClear}
+        disabled={disabled}
+        style={({ pressed }) => [
+          styles.clearButton,
+          pressed && !disabled && { backgroundColor: "#f5f5f5" },
+          disabled && { opacity: 0.5 },
+        ]}
+      >
+        <Text style={styles.clearButtonText}>
+          {working ? "Clearing…" : "Clear cache"}
+        </Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#fafafa" },
   scroll: { padding: 20, paddingBottom: 40 },
@@ -142,4 +230,14 @@ const styles = StyleSheet.create({
   },
   buttonText: { color: "#dc2626", fontSize: 16, fontWeight: "500" },
   note: { marginTop: 24, color: "#737373", fontSize: 13 },
+  clearButton: {
+    marginTop: 12,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#d4d4d4",
+    borderRadius: 8,
+    padding: 12,
+    alignItems: "center",
+  },
+  clearButtonText: { color: "#171717", fontSize: 15, fontWeight: "500" },
 });
