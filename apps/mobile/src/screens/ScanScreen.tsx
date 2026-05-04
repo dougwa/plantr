@@ -126,7 +126,7 @@ export default function ScanScreen() {
       <CameraView
         style={StyleSheet.absoluteFill}
         facing="back"
-        barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
+        barcodeScannerSettings={{ barcodeTypes: ["qr", "code128"] }}
         onBarcodeScanned={busy ? undefined : (e) => handleScan(e.data)}
       />
       {busy && (
@@ -151,7 +151,7 @@ export default function ScanScreen() {
         </View>
         <View style={styles.frameWrap} pointerEvents="none">
           <View style={styles.frame} />
-          <Text style={styles.helpText}>Center the QR code in the box</Text>
+          <Text style={styles.helpText}>Center the code in the box</Text>
         </View>
         <View />
       </SafeAreaView>
