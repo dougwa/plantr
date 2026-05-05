@@ -1,4 +1,4 @@
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 
 const CACHE_DIR = `${FileSystem.cacheDirectory}plantr-images/`;
 
@@ -80,9 +80,7 @@ export async function getImageCacheBytes(): Promise<number> {
   const files = await FileSystem.readDirectoryAsync(CACHE_DIR);
   let total = 0;
   for (const f of files) {
-    const fInfo = await FileSystem.getInfoAsync(`${CACHE_DIR}${f}`, {
-      size: true,
-    });
+    const fInfo = await FileSystem.getInfoAsync(`${CACHE_DIR}${f}`);
     if (fInfo.exists && typeof fInfo.size === "number") total += fInfo.size;
   }
   return total;

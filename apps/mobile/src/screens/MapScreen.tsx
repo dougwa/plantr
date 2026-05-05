@@ -14,7 +14,8 @@ import {
   View,
 } from "react-native";
 import MapView, {
-  MapPressEvent,
+  type LongPressEvent,
+  type MapPressEvent,
   Marker,
   Polygon,
   PROVIDER_DEFAULT,
@@ -49,7 +50,7 @@ const MIN_HALF_M = 0.5; // minimum half-width/height in meters
 // requires the largest offset wins.
 const RESIZE_BUBBLE_RADIUS_PX = 11; // visible bubble radius
 const ACTION_ICON_RADIUS_PX = 17; // visible chip radius
-const RESIZE_HIT_RADIUS_PX = 22; // half of 44pt resize hit area
+const RESIZE_HIT_RADIUS_PX = 30; // half of 60pt resize hit area
 const ACTION_HIT_RADIUS_PX = 28; // half of 56pt action hit area
 const ICON_GAP_PX = 15;
 
@@ -195,7 +196,6 @@ export default function MapScreen() {
   const [viewportZoom, setViewportZoom] = useState<number | null>(null);
   const hasSavedViewRef = useRef(false);
   const lastFitCountRef = useRef(0);
-  const lastShapeTapRef = useRef(0);
 
   const token = state.status === "authed" ? state.token : null;
 
@@ -376,16 +376,82 @@ export default function MapScreen() {
     setEditingId(r.data.shape.id);
   }
 
-  function onShapeTap(s: LocationShape) {
-    lastShapeTapRef.current = Date.now();
-    setEditingId(s.id);
+  function onMapPress(_e: MapPressEvent) {
+    setEditingId(null);
   }
 
-  function onMapPress(_e: MapPressEvent) {
-    // Polygons fire onPress before MapView's onPress; this is a defensive
-    // guard against the rare race where both fire.
-    if (Date.now() - lastShapeTapRef.current < 200) return;
-    setEditingId(null);
+  function pointInShape(s: LocationShape, coord: LatLng): boolean {
+    const local = latLngToLocal(s, coord);
+    const halfW = s.widthMeters / 2;
+    const halfH = s.heightMeters / 2;
+    if (s.kind === "ellipse") {
+      const rx = local.x / halfW;
+      const ry = local.y / halfH;
+      return rx * rx + ry * ry <= 1;
+    }
+    return Math.abs(local.x) <= halfW && Math.abs(local.y) <= halfH;
+  }
+
+  function findShapeAt(coord: LatLng): LocationShape | null {
+    // Match the render order: non-property shapes are drawn on top, so they
+    // win the hit-test; property shapes are checked last.
+    for (const s of shapes) {
+      if (s.kind !== "property" && pointInShape(s, coord)) return s;
+    }
+    for (const s of shapes) {
+      if (s.kind === "property" && pointInShape(s, coord)) return s;
+    }
+    return null;
+  }
+
+  function viewPlantsAtShape(s: LocationShape) {
+    const label = s.name?.trim() || "(unnamed)";
+    nav.navigate("Tabs", {
+      screen: "Browse",
+      params: {
+        screen: "PlantList",
+        params: {
+          filter: { kind: "location", shapeId: s.id, label },
+          title: label,
+        },
+      },
+    });
+  }
+
+  function showShapeMenu(s: LocationShape) {
+    const title =
+      s.name?.trim() || (s.kind === "property" ? "Property" : "Location");
+    if (Platform.OS === "ios") {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options: ["Cancel", "Edit", "View Plants", "Delete"],
+          cancelButtonIndex: 0,
+          destructiveButtonIndex: 3,
+          title,
+        },
+        (i) => {
+          if (i === 1) setEditingId(s.id);
+          else if (i === 2) viewPlantsAtShape(s);
+          else if (i === 3) setSubModal({ kind: "delete", shapeId: s.id });
+        },
+      );
+    } else {
+      Alert.alert(title, undefined, [
+        { text: "Cancel", style: "cancel" },
+        { text: "Edit", onPress: () => setEditingId(s.id) },
+        { text: "View Plants", onPress: () => viewPlantsAtShape(s) },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => setSubModal({ kind: "delete", shapeId: s.id }),
+        },
+      ]);
+    }
+  }
+
+  function onMapLongPress(e: LongPressEvent) {
+    const s = findShapeAt(e.nativeEvent.coordinate);
+    if (s) showShapeMenu(s);
   }
 
   function onMarkerPress(p: PlantListItem) {
@@ -696,11 +762,12 @@ export default function MapScreen() {
         mapType="hybrid"
         style={StyleSheet.absoluteFill}
         onPress={onMapPress}
+        onLongPress={onMapLongPress}
         onRegionChangeComplete={persistViewport}
         showsUserLocation
         {...(initialCamera ? { initialCamera } : {})}
       >
-        {/* Property shapes first so location shapes render above and win taps. */}
+        {/* Property shapes first so location shapes render above. */}
         {shapes
           .filter((s) => s.kind === "property")
           .map((s) => (
@@ -711,8 +778,6 @@ export default function MapScreen() {
               fillColor="rgba(0,0,0,0)"
               strokeWidth={2}
               lineDashPattern={[8, 6]}
-              tappable
-              onPress={() => onShapeTap(s)}
             />
           ))}
         {shapes
@@ -724,8 +789,6 @@ export default function MapScreen() {
               strokeColor={s.color}
               fillColor={`${s.color}33`}
               strokeWidth={2}
-              tappable
-              onPress={() => onShapeTap(s)}
             />
           ))}
         {plantsWithGps.map((p) => (
@@ -789,7 +852,7 @@ export default function MapScreen() {
           <Text style={styles.helpText}>
             {editing
               ? "Drag center to move · sides to resize · rotator to rotate · tap map to finish"
-              : "Tap a location to edit · Tap a marker for details"}
+              : "Long-press a location for options · Tap a marker for details"}
           </Text>
         </View>
       </SafeAreaView>
@@ -1155,8 +1218,8 @@ const styles = StyleSheet.create({
   dotInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: "#16a34a" },
 
   hitMed: {
-    width: 44,
-    height: 44,
+    width: 60,
+    height: 60,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "transparent",
