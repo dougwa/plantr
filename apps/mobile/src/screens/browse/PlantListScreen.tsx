@@ -12,7 +12,13 @@ import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import AuthImage from "../../components/AuthImage";
 import { useAuth } from "../../contexts/AuthContext";
-import { listPlants, type PlantListItem } from "../../lib/api";
+import {
+  listLocationShapes,
+  listPlants,
+  type LocationShape,
+  type PlantListItem,
+} from "../../lib/api";
+import { shapeIdsForPlant } from "../../lib/geometry";
 import type { BrowseStackParamList, PlantFilter } from "../../navigation/BrowseStackTypes";
 import type { RootStackParamList } from "../../navigation/types";
 
@@ -20,28 +26,37 @@ type StackNav = NativeStackNavigationProp<BrowseStackParamList, "PlantList">;
 type RootNav = NativeStackNavigationProp<RootStackParamList>;
 type Route = RouteProp<BrowseStackParamList, "PlantList">;
 
-function iconForType(typeName: string | null): keyof typeof Ionicons.glyphMap {
-  const n = (typeName ?? "").toLowerCase();
-  if (n.includes("tree")) return "leaf-outline";
+function iconForTags(tagNames: string[]): keyof typeof Ionicons.glyphMap {
+  const joined = tagNames.join(" ").toLowerCase();
+  if (joined.includes("tree")) return "leaf-outline";
   if (
-    n.includes("orchid") ||
-    n.includes("rose") ||
-    n.includes("hydrangea") ||
-    n.includes("rhodod")
+    joined.includes("orchid") ||
+    joined.includes("rose") ||
+    joined.includes("hydrangea") ||
+    joined.includes("rhodod")
   ) {
     return "flower-outline";
   }
   return "leaf-outline";
 }
 
-function matchesFilter(p: PlantListItem, f: PlantFilter): boolean {
+function matchesFilter(
+  p: PlantListItem,
+  f: PlantFilter,
+  shapes: LocationShape[],
+): boolean {
   switch (f.kind) {
     case "all":
       return true;
-    case "type":
-      return (p.type?.id ?? null) === f.typeId;
-    case "location":
-      return (p.locationShapeId ?? null) === f.shapeId;
+    case "tag": {
+      if (f.tagId == null) return p.tags.length === 0;
+      return p.tags.some((t) => t.id === f.tagId);
+    }
+    case "location": {
+      const ids = shapeIdsForPlant(p, shapes);
+      if (f.shapeId == null) return ids.size === 0;
+      return ids.has(f.shapeId);
+    }
     case "species": {
       const s = p.species?.trim() || null;
       return s === (f.species ?? null);
@@ -57,13 +72,18 @@ export default function PlantListScreen() {
   const token = state.status === "authed" ? state.token : null;
 
   const [plants, setPlants] = useState<PlantListItem[]>([]);
+  const [shapes, setShapes] = useState<LocationShape[]>([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<"tile" | "list">("tile");
 
   const reload = useCallback(async () => {
     if (!token) return;
-    const r = await listPlants(token);
-    if (r.ok) setPlants(r.data.plants);
+    const [pRes, sRes] = await Promise.all([
+      listPlants(token),
+      listLocationShapes(token),
+    ]);
+    if (pRes.ok) setPlants(pRes.data.plants);
+    if (sRes.ok) setShapes(sRes.data.shapes);
   }, [token]);
 
   useEffect(() => {
@@ -100,8 +120,8 @@ export default function PlantListScreen() {
   }, [stackNav, route.params.title, view]);
 
   const filtered = useMemo(
-    () => plants.filter((p) => matchesFilter(p, route.params.filter)),
-    [plants, route.params.filter],
+    () => plants.filter((p) => matchesFilter(p, route.params.filter, shapes)),
+    [plants, shapes, route.params.filter],
   );
 
   if (loading) {
@@ -146,7 +166,7 @@ export default function PlantListScreen() {
                 />
               ) : (
                 <Ionicons
-                  name={iconForType(item.type?.name ?? null)}
+                  name={iconForTags(item.tags.map((t) => t.name))}
                   size={24}
                   color="#16a34a"
                 />
@@ -156,15 +176,29 @@ export default function PlantListScreen() {
               <Text style={styles.listName} numberOfLines={1}>
                 {item.name?.trim() || item.qrCode}
               </Text>
-              <Text style={styles.listMeta} numberOfLines={1}>
-                {[
-                  item.name?.trim() ? item.qrCode : null,
-                  item.type?.name,
-                  item.species,
-                ]
-                  .filter(Boolean)
-                  .join(" · ") || "—"}
-              </Text>
+              {item.tags.length > 0 ? (
+                <View style={styles.listTagRow}>
+                  {item.tags.map((t) => (
+                    <View
+                      key={t.id}
+                      style={[styles.tagChip, { backgroundColor: t.color }]}
+                    >
+                      <Text style={styles.tagChipText} numberOfLines={1}>
+                        {t.name}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Text style={styles.listMeta} numberOfLines={1}>
+                  {[
+                    item.name?.trim() ? item.qrCode : null,
+                    item.species,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ") || "—"}
+                </Text>
+              )}
             </View>
             <Ionicons name="chevron-forward" size={18} color="#a3a3a3" />
           </Pressable>
@@ -196,7 +230,7 @@ export default function PlantListScreen() {
               />
             ) : (
               <Ionicons
-                name={iconForType(item.type?.name ?? null)}
+                name={iconForTags(item.tags.map((t) => t.name))}
                 size={48}
                 color="#16a34a"
               />
@@ -205,11 +239,23 @@ export default function PlantListScreen() {
           <Text style={styles.tileName} numberOfLines={1}>
             {item.name?.trim() || item.qrCode}
           </Text>
-          <Text style={styles.tileType} numberOfLines={1}>
-            {[item.name?.trim() ? item.qrCode : null, item.type?.name]
-              .filter(Boolean)
-              .join(" · ")}
-          </Text>
+          {item.tags.length > 0 ? (
+            <View style={styles.tileTagRow}>
+              {item.tags.slice(0, 3).map((t) => (
+                <View
+                  key={t.id}
+                  style={[styles.tagDot, { backgroundColor: t.color }]}
+                />
+              ))}
+              <Text style={styles.tileType} numberOfLines={1}>
+                {item.tags.map((t) => t.name).join(", ")}
+              </Text>
+            </View>
+          ) : (
+            <Text style={styles.tileType} numberOfLines={1}>
+              {item.name?.trim() ? item.qrCode : ""}
+            </Text>
+          )}
         </Pressable>
       )}
     />
@@ -248,6 +294,29 @@ const styles = StyleSheet.create({
   listText: { flex: 1 },
   listName: { fontSize: 15, fontWeight: "500", color: "#171717" },
   listMeta: { fontSize: 12, color: "#737373", marginTop: 2 },
+  listTagRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 4,
+    marginTop: 4,
+  },
+  tagChip: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+  },
+  tagChipText: { color: "#fff", fontSize: 11, fontWeight: "500" },
+  tileTagRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+  },
+  tagDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
 
   tileContent: { padding: 12, gap: 12 },
   tileRow: { gap: 12 },

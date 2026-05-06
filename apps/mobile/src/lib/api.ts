@@ -29,11 +29,13 @@ export type PublicAction = {
   createdBy: { id: string; username: string };
 };
 
+export type Tag = { id: string; name: string; color: string };
+
 export type PublicPlant = {
   id: string;
   qrCode: string;
   name: string | null;
-  type: { id: string; name: string } | null;
+  tags: Tag[];
   species: string | null;
   description: string | null;
   notes: string | null;
@@ -48,8 +50,6 @@ export type PublicPlant = {
   createdAt: string;
   updatedAt: string;
 };
-
-export type PlantType = { id: string; name: string };
 
 type Result<T> = { ok: true; data: T } | { ok: false; status: number; error: string };
 
@@ -115,10 +115,34 @@ export async function logout(token: string): Promise<void> {
   await request("/auth/logout", { method: "POST", token }).catch(() => {});
 }
 
-// --- plant types ------------------------------------------------------------
+// --- tags -------------------------------------------------------------------
 
-export async function listPlantTypes(token: string) {
-  return request<{ types: PlantType[] }>("/plant-types", { method: "GET", token });
+export async function listTags(token: string) {
+  return request<{ tags: Tag[] }>("/tags", { method: "GET", token });
+}
+
+export async function createTag(token: string, body: { name: string; color: string }) {
+  return request<{ tag: Tag }>("/tags", {
+    method: "POST",
+    body: JSON.stringify(body),
+    token,
+  });
+}
+
+export async function updateTag(
+  token: string,
+  id: string,
+  body: { name?: string; color?: string },
+) {
+  return request<{ tag: Tag }>(`/tags/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+    token,
+  });
+}
+
+export async function deleteTag(token: string, id: string) {
+  return request<{ ok: boolean }>(`/tags/${id}`, { method: "DELETE", token });
 }
 
 // --- plants -----------------------------------------------------------------
@@ -150,7 +174,7 @@ export async function patchPlant(
   id: string,
   patch: Partial<{
     name: string | null;
-    typeId: string | null;
+    tagIds: string[];
     species: string | null;
     description: string | null;
     notes: string | null;
@@ -246,7 +270,7 @@ export type PlantListItem = {
   id: string;
   qrCode: string;
   name: string | null;
-  type: { id: string; name: string } | null;
+  tags: Tag[];
   species: string | null;
   gpsLat: number | null;
   gpsLng: number | null;

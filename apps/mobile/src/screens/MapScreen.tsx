@@ -27,7 +27,11 @@ import MapView, {
 import * as Location from "expo-location";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useFocusEffect, useNavigation } from "@react-navigation/native";
+import {
+  CommonActions,
+  useFocusEffect,
+  useNavigation,
+} from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useAuth } from "../contexts/AuthContext";
 import { loadViewport, saveViewport } from "../lib/storage";
@@ -406,16 +410,32 @@ export default function MapScreen() {
 
   function viewPlantsAtShape(s: LocationShape) {
     const label = s.name?.trim() || "(unnamed)";
-    nav.navigate("Tabs", {
-      screen: "Browse",
-      params: {
-        screen: "PlantList",
+    nav.dispatch(
+      CommonActions.navigate({
+        name: "Tabs",
         params: {
-          filter: { kind: "location", shapeId: s.id, label },
-          title: label,
+          screen: "Browse",
+          params: {
+            state: {
+              routes: [
+                { name: "BrowseHome" },
+                {
+                  name: "BrowseEntries",
+                  params: { category: "location" },
+                },
+                {
+                  name: "PlantList",
+                  params: {
+                    filter: { kind: "location", shapeId: s.id, label },
+                    title: label,
+                  },
+                },
+              ],
+            },
+          },
         },
-      },
-    });
+      }),
+    );
   }
 
   function showShapeMenu(s: LocationShape) {
@@ -1183,7 +1203,10 @@ function ClusterPickerModal({
                       {p.name?.trim() || p.qrCode}
                     </Text>
                     <Text style={styles.pickerType}>
-                      {[p.name?.trim() ? p.qrCode : null, p.type?.name]
+                      {[
+                        p.name?.trim() ? p.qrCode : null,
+                        p.tags.map((t) => t.name).join(", ") || null,
+                      ]
                         .filter(Boolean)
                         .join(" · ")}
                     </Text>

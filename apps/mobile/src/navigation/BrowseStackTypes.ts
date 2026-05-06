@@ -1,8 +1,8 @@
-export type BrowseCategory = "location" | "type" | "species";
+export type BrowseCategory = "location" | "tag" | "species";
 
 export type PlantFilter =
   | { kind: "all" }
-  | { kind: "type"; typeId: string | null; label: string }
+  | { kind: "tag"; tagId: string | null; label: string }
   | { kind: "location"; shapeId: string | null; label: string }
   | { kind: "species"; species: string | null; label: string };
 

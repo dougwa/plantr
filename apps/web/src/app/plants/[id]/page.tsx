@@ -64,8 +64,20 @@ export default async function PlantPage({ params }: { params: Promise<{ id: stri
             {plant.name ?? <span className="text-neutral-400">Unnamed</span>}
           </h1>
           <p className="mt-1 text-xs font-mono text-neutral-500">{plant.qrCode}</p>
+          {plant.tags.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-1.5">
+              {plant.tags.map((t) => (
+                <span
+                  key={t.id}
+                  className="rounded-full px-2.5 py-0.5 text-xs font-medium text-white"
+                  style={{ backgroundColor: t.color }}
+                >
+                  {t.name}
+                </span>
+              ))}
+            </div>
+          )}
           <dl className="mt-3 divide-y divide-neutral-100 text-sm">
-            <Field label="Type" value={plant.type?.name ?? null} />
             <Field label="Species" value={plant.species} />
             <Field label="Description" value={plant.description} />
             <Field label="Notes" value={plant.notes} />

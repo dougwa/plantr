@@ -17,7 +17,7 @@ const createSchema = z.object({
 
 const patchSchema = z.object({
   name: z.string().max(128).nullable().optional(),
-  typeId: z.string().nullable().optional(),
+  tagIds: z.array(z.string()).max(64).optional(),
   species: z.string().max(128).nullable().optional(),
   description: z.string().max(2000).nullable().optional(),
   notes: z.string().max(4000).nullable().optional(),
@@ -38,7 +38,7 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
     const plants = await prisma.plant.findMany({
       orderBy: { createdAt: "asc" },
       include: {
-        type: { select: { id: true, name: true } },
+        tags: { orderBy: { name: "asc" } },
         coverPhoto: { select: { id: true } },
       },
     });
@@ -47,7 +47,7 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
         id: p.id,
         qrCode: p.qrCode,
         name: p.name,
-        type: p.type ? { id: p.type.id, name: p.type.name } : null,
+        tags: p.tags.map((t) => ({ id: t.id, name: t.name, color: t.color })),
         species: p.species,
         gpsLat: p.gpsLat,
         gpsLng: p.gpsLng,
@@ -123,10 +123,20 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
           .send({ error: "invalid_request", details: parsed.error.flatten() });
       }
 
-      const data = parsed.data;
-      if (data.typeId) {
-        const exists = await prisma.plantType.findUnique({ where: { id: data.typeId } });
-        if (!exists) return reply.code(400).send({ error: "invalid_type_id" });
+      const { tagIds, ...rest } = parsed.data;
+      const data: Record<string, unknown> = { ...rest };
+
+      if (tagIds !== undefined) {
+        if (tagIds.length > 0) {
+          const found = await prisma.tag.findMany({
+            where: { id: { in: tagIds } },
+            select: { id: true },
+          });
+          if (found.length !== new Set(tagIds).size) {
+            return reply.code(400).send({ error: "invalid_tag_id" });
+          }
+        }
+        data.tags = { set: tagIds.map((id) => ({ id })) };
       }
 
       // If GPS changed (and locationShapeId not explicitly set), re-resolve the shape.
@@ -139,10 +149,11 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
           select: { gpsLat: true, gpsLng: true },
         });
         if (current) {
-          const lat = data.gpsLat !== undefined ? data.gpsLat : current.gpsLat;
-          const lng = data.gpsLng !== undefined ? data.gpsLng : current.gpsLng;
-          (data as { locationShapeId?: string | null }).locationShapeId =
-            await resolveShapeForPoint(lat, lng);
+          const lat =
+            data.gpsLat !== undefined ? (data.gpsLat as number | null) : current.gpsLat;
+          const lng =
+            data.gpsLng !== undefined ? (data.gpsLng as number | null) : current.gpsLng;
+          data.locationShapeId = await resolveShapeForPoint(lat, lng);
         }
       }
 
@@ -197,7 +208,7 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
         where: { id },
         data: {
           name: null,
-          typeId: null,
+          tags: { set: [] },
           species: null,
           description: null,
           notes: null,

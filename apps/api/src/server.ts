@@ -6,7 +6,7 @@ import { env } from "./env.js";
 import authPlugin from "./auth/plugin.js";
 import { authRoutes } from "./auth/routes.js";
 import { plantRoutes } from "./routes/plants.js";
-import { plantTypeRoutes } from "./routes/plant-types.js";
+import { tagRoutes } from "./routes/tags.js";
 import { photoRoutes } from "./routes/photos.js";
 import { actionRoutes } from "./routes/actions.js";
 import { locationShapeRoutes } from "./routes/location-shapes.js";
@@ -23,7 +23,7 @@ await app.register(multipart, {
 });
 await app.register(authPlugin);
 await app.register(authRoutes);
-await app.register(plantTypeRoutes);
+await app.register(tagRoutes);
 await app.register(plantRoutes);
 await app.register(photoRoutes);
 await app.register(actionRoutes);

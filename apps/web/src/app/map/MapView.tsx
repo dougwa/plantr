@@ -165,7 +165,19 @@ export default function MapView({ plants, shapes, mapboxToken }: Props) {
               <div className="text-sm">
                 <div className="font-medium">{p.name ?? "Unnamed"}</div>
                 <div className="text-neutral-500 text-xs">{p.qrCode}</div>
-                {p.type && <div className="text-neutral-700 text-xs mt-1">{p.type.name}</div>}
+                {p.tags.length > 0 && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {p.tags.map((t) => (
+                      <span
+                        key={t.id}
+                        className="rounded-full px-1.5 py-0.5 text-[10px] font-medium text-white"
+                        style={{ backgroundColor: t.color }}
+                      >
+                        {t.name}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             </Popup>
           </CircleMarker>

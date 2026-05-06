@@ -40,9 +40,10 @@ model Session {
   @@index([userId])
 }
 
-model PlantType {
+model Tag {
   id        String   @id @default(cuid())
   name      String   @unique
+  color     String
   createdAt DateTime @default(now())
   plants    Plant[]
 }
@@ -51,8 +52,6 @@ model Plant {
   id              String         @id @default(cuid())
   qrCode          String         @unique
   name            String?
-  typeId          String?
-  type            PlantType?     @relation(fields: [typeId], references: [id], onDelete: SetNull)
   species         String?
   description     String?
   notes           String?
@@ -69,8 +68,8 @@ model Plant {
   updatedAt       DateTime       @updatedAt
   photos          Photo[]        @relation("PlantPhotos")
   actions         Action[]
+  tags            Tag[]
 
-  @@index([typeId])
   @@index([locationShapeId])
 }
 

@@ -36,7 +36,7 @@ import {
   deletePhoto,
   deletePlant,
   getPlant,
-  listPlantTypes,
+  listTags,
   patchAction,
   patchPlant,
   recordAction,
@@ -44,9 +44,9 @@ import {
   setCoverPhoto,
   uploadPhoto,
   type ActionKind,
-  type PlantType,
   type PublicAction,
   type PublicPlant,
+  type Tag,
 } from "../lib/api";
 import AuthImage from "../components/AuthImage";
 import type { RootStackParamList } from "../navigation/types";
@@ -65,10 +65,10 @@ export default function PlantDetailScreen() {
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const { state } = useAuth();
   const [plant, setPlant] = useState<PublicPlant | null>(null);
-  const [types, setTypes] = useState<PlantType[]>([]);
+  const [tags, setTags] = useState<Tag[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [typePickerOpen, setTypePickerOpen] = useState(false);
+  const [tagPickerOpen, setTagPickerOpen] = useState(false);
   const [actionInput, setActionInput] = useState<
     | { mode: "create"; kind: ActionKind; label: string; notes: string }
     | { mode: "edit"; actionId: string; label: string; notes: string }
@@ -134,8 +134,8 @@ export default function PlantDetailScreen() {
       setLoading(true);
       await reload();
       if (token) {
-        const t = await listPlantTypes(token);
-        if (t.ok) setTypes(t.data.types);
+        const t = await listTags(token);
+        if (t.ok) setTags(t.data.tags);
       }
       setLoading(false);
     })();
@@ -385,8 +385,6 @@ export default function PlantDetailScreen() {
     );
   }
 
-  const typeLabel = plant.type?.name ?? "Set type";
-
   return (
     <View style={styles.root}>
       <SafeAreaView edges={["top"]} style={styles.headerSafe}>
@@ -437,11 +435,24 @@ export default function PlantDetailScreen() {
             onSave={(v) => patch({ name: v || null })}
             big
           />
-          <Pressable onPress={() => setTypePickerOpen(true)} style={styles.row}>
-            <Text style={styles.rowLabel}>Type</Text>
-            <Text style={[styles.rowValue, !plant.type && styles.placeholderValue]}>
-              {typeLabel}
-            </Text>
+          <Pressable
+            onPress={() => setTagPickerOpen(true)}
+            style={[styles.row, styles.rowMultiline]}
+          >
+            <Text style={styles.rowLabel}>Tags</Text>
+            <View style={styles.rowValueWrap}>
+              {plant.tags.length > 0 ? (
+                <View style={styles.tagWrap}>
+                  {plant.tags.map((t) => (
+                    <TagBubble key={t.id} tag={t} />
+                  ))}
+                </View>
+              ) : (
+                <Text style={[styles.rowValue, styles.placeholderValue]}>
+                  Add tags
+                </Text>
+              )}
+            </View>
           </Pressable>
           <EditableText
             label="Species"
@@ -590,36 +601,16 @@ export default function PlantDetailScreen() {
         </GestureHandlerRootView>
       </Modal>
 
-      <Modal
-        transparent
-        visible={typePickerOpen}
-        animationType="fade"
-        onRequestClose={() => setTypePickerOpen(false)}
-      >
-        <Pressable style={styles.modalBackdrop} onPress={() => setTypePickerOpen(false)}>
-          <Pressable style={styles.modalSheet} onPress={() => {}}>
-            <Text style={styles.modalTitle}>Choose type</Text>
-            <FlatList
-              data={types}
-              keyExtractor={(t) => t.id}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={styles.typeRow}
-                  onPress={async () => {
-                    setTypePickerOpen(false);
-                    await patch({ typeId: item.id });
-                  }}
-                >
-                  <Text style={styles.typeLabel}>{item.name}</Text>
-                  {plant.type?.id === item.id && (
-                    <Ionicons name="checkmark" size={18} color="#16a34a" />
-                  )}
-                </TouchableOpacity>
-              )}
-            />
-          </Pressable>
-        </Pressable>
-      </Modal>
+      <TagPickerModal
+        visible={tagPickerOpen}
+        tags={tags}
+        selectedIds={plant.tags.map((t) => t.id)}
+        onClose={() => setTagPickerOpen(false)}
+        onSave={async (ids) => {
+          setTagPickerOpen(false);
+          await patch({ tagIds: ids });
+        }}
+      />
 
       <Modal
         transparent
@@ -721,6 +712,103 @@ function EditableText({
         </Pressable>
       )}
     </View>
+  );
+}
+
+function TagBubble({ tag, dim }: { tag: Tag; dim?: boolean }) {
+  return (
+    <View
+      style={[
+        styles.tagBubble,
+        { backgroundColor: tag.color },
+        dim && { opacity: 0.35 },
+      ]}
+    >
+      <Text style={styles.tagBubbleText} numberOfLines={1}>
+        {tag.name}
+      </Text>
+    </View>
+  );
+}
+
+function TagPickerModal({
+  visible,
+  tags,
+  selectedIds,
+  onClose,
+  onSave,
+}: {
+  visible: boolean;
+  tags: Tag[];
+  selectedIds: string[];
+  onClose: () => void;
+  onSave: (ids: string[]) => void | Promise<void>;
+}) {
+  const [draft, setDraft] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    if (visible) setDraft(new Set(selectedIds));
+  }, [visible, selectedIds]);
+
+  function toggle(id: string) {
+    setDraft((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  return (
+    <Modal
+      transparent
+      visible={visible}
+      animationType="fade"
+      onRequestClose={onClose}
+    >
+      <Pressable style={styles.modalBackdrop} onPress={onClose}>
+        <Pressable style={styles.modalSheet} onPress={() => {}}>
+          <Text style={styles.modalTitle}>Choose tags</Text>
+          {tags.length === 0 ? (
+            <Text style={styles.tagPickerEmpty}>
+              No tags yet — add some in Settings.
+            </Text>
+          ) : (
+            <FlatList
+              data={tags}
+              keyExtractor={(t) => t.id}
+              renderItem={({ item }) => {
+                const on = draft.has(item.id);
+                return (
+                  <TouchableOpacity
+                    style={styles.tagPickerRow}
+                    onPress={() => toggle(item.id)}
+                  >
+                    <TagBubble tag={item} dim={!on} />
+                    <View style={{ flex: 1 }} />
+                    <Ionicons
+                      name={on ? "checkbox" : "square-outline"}
+                      size={22}
+                      color={on ? "#16a34a" : "#a3a3a3"}
+                    />
+                  </TouchableOpacity>
+                );
+              }}
+            />
+          )}
+          <View style={styles.modalButtons}>
+            <TouchableOpacity onPress={onClose} style={styles.modalCancel}>
+              <Text style={styles.modalCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => onSave(Array.from(draft))}
+              style={styles.modalSave}
+            >
+              <Text style={styles.modalSaveText}>Save</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }
 
@@ -931,14 +1019,37 @@ const styles = StyleSheet.create({
     maxHeight: "70%",
   },
   modalTitle: { fontSize: 18, fontWeight: "600", marginBottom: 12 },
-  typeRow: {
+  tagWrap: {
     flexDirection: "row",
-    justifyContent: "space-between",
-    paddingVertical: 14,
+    flexWrap: "wrap",
+    gap: 6,
+  },
+  tagBubble: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    alignSelf: "flex-start",
+    maxWidth: "100%",
+  },
+  tagBubbleText: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  tagPickerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderColor: "#f5f5f5",
   },
-  typeLabel: { fontSize: 16, color: "#171717" },
+  tagPickerEmpty: {
+    paddingVertical: 16,
+    fontSize: 14,
+    color: "#737373",
+    textAlign: "center",
+  },
   notesInput: {
     borderWidth: 1,
     borderColor: "#d4d4d4",

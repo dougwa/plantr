@@ -26,11 +26,13 @@ export type PublicAction = {
   createdBy: { id: string; username: string };
 };
 
+export type Tag = { id: string; name: string; color: string };
+
 export type PublicPlant = {
   id: string;
   qrCode: string;
   name: string | null;
-  type: { id: string; name: string } | null;
+  tags: Tag[];
   species: string | null;
   description: string | null;
   notes: string | null;
@@ -50,7 +52,7 @@ export type PlantListItem = {
   id: string;
   qrCode: string;
   name: string | null;
-  type: { id: string; name: string } | null;
+  tags: Tag[];
   gpsLat: number | null;
   gpsLng: number | null;
   locationShapeId: string | null;

@@ -28,10 +28,10 @@ const TILES: Tile[] = [
     onPress: (nav) => nav.navigate("BrowseEntries", { category: "location" }),
   },
   {
-    key: "type",
-    label: "Type",
-    icon: "pricetag-outline",
-    onPress: (nav) => nav.navigate("BrowseEntries", { category: "type" }),
+    key: "tag",
+    label: "Tags",
+    icon: "pricetags-outline",
+    onPress: (nav) => nav.navigate("BrowseEntries", { category: "tag" }),
   },
   {
     key: "species",

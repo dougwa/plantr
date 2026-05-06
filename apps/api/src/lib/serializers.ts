@@ -1,4 +1,4 @@
-import type { Action, ActionKind, Photo, Plant, PlantType, User } from "@prisma/client";
+import type { Action, ActionKind, Photo, Plant, Tag, User } from "@prisma/client";
 
 export type PublicPhoto = {
   id: string;
@@ -20,11 +20,13 @@ export type PublicAction = {
   createdBy: { id: string; username: string };
 };
 
+export type PublicTag = { id: string; name: string; color: string };
+
 export type PublicPlant = {
   id: string;
   qrCode: string;
   name: string | null;
-  type: { id: string; name: string } | null;
+  tags: PublicTag[];
   species: string | null;
   description: string | null;
   notes: string | null;
@@ -44,12 +46,16 @@ type PhotoWithCreator = Photo & { createdBy: Pick<User, "id" | "username"> };
 type ActionWithCreator = Action & { createdBy: Pick<User, "id" | "username"> };
 
 type PlantWithRelations = Plant & {
-  type: PlantType | null;
+  tags: Tag[];
   coverPhoto: PhotoWithCreator | null;
   photos: PhotoWithCreator[];
   actions: ActionWithCreator[];
   createdBy: Pick<User, "id" | "username">;
 };
+
+export function publicTag(t: Tag): PublicTag {
+  return { id: t.id, name: t.name, color: t.color };
+}
 
 export function publicPhoto(photo: PhotoWithCreator): PublicPhoto {
   return {
@@ -80,7 +86,7 @@ export function publicPlant(plant: PlantWithRelations): PublicPlant {
     id: plant.id,
     qrCode: plant.qrCode,
     name: plant.name,
-    type: plant.type ? { id: plant.type.id, name: plant.type.name } : null,
+    tags: plant.tags.map(publicTag),
     species: plant.species,
     description: plant.description,
     notes: plant.notes,
@@ -98,7 +104,7 @@ export function publicPlant(plant: PlantWithRelations): PublicPlant {
 }
 
 export const PLANT_INCLUDE = {
-  type: true,
+  tags: { orderBy: { name: "asc" as const } },
   coverPhoto: { include: { createdBy: { select: { id: true, username: true } } } },
   photos: {
     orderBy: { createdAt: "asc" as const },

@@ -3,15 +3,15 @@ import argon2 from "argon2";
 
 const prisma = new PrismaClient();
 
-const DEFAULT_PLANT_TYPES = [
-  "Rose",
-  "Hydrangea",
-  "Rhododendron",
-  "Flowering Tree",
-  "Fruit Tree",
-  "Indoor Orchid",
-  "Outdoor Orchid",
-  "Other",
+const DEFAULT_TAGS: { name: string; color: string }[] = [
+  { name: "Rose", color: "#ec4899" },
+  { name: "Hydrangea", color: "#0ea5e9" },
+  { name: "Rhododendron", color: "#a855f7" },
+  { name: "Flowering Tree", color: "#16a34a" },
+  { name: "Fruit Tree", color: "#f97316" },
+  { name: "Indoor Orchid", color: "#eab308" },
+  { name: "Outdoor Orchid", color: "#dc2626" },
+  { name: "Other", color: "#525252" },
 ];
 
 async function seedAdmin() {
@@ -27,20 +27,20 @@ async function seedAdmin() {
   console.log("seeded admin/admin (mustChangePass=true)");
 }
 
-async function seedPlantTypes() {
-  for (const name of DEFAULT_PLANT_TYPES) {
-    await prisma.plantType.upsert({
+async function seedTags() {
+  for (const { name, color } of DEFAULT_TAGS) {
+    await prisma.tag.upsert({
       where: { name },
       update: {},
-      create: { name },
+      create: { name, color },
     });
   }
-  console.log(`seeded ${DEFAULT_PLANT_TYPES.length} plant types`);
+  console.log(`seeded ${DEFAULT_TAGS.length} tags`);
 }
 
 async function main() {
   await seedAdmin();
-  await seedPlantTypes();
+  await seedTags();
 }
 
 main()

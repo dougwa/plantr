@@ -14,11 +14,12 @@ import { useAuth } from "../../contexts/AuthContext";
 import {
   listLocationShapes,
   listPlants,
-  listPlantTypes,
+  listTags,
   type LocationShape,
   type PlantListItem,
-  type PlantType,
+  type Tag,
 } from "../../lib/api";
+import { shapeIdsForPlant } from "../../lib/geometry";
 import type {
   BrowseStackParamList,
   PlantFilter,
@@ -27,11 +28,17 @@ import type {
 type Nav = NativeStackNavigationProp<BrowseStackParamList, "BrowseEntries">;
 type Route = RouteProp<BrowseStackParamList, "BrowseEntries">;
 
-type Entry = { key: string; label: string; count: number; filter: PlantFilter };
+type Entry = {
+  key: string;
+  label: string;
+  count: number;
+  filter: PlantFilter;
+  color?: string;
+};
 
 const CATEGORY_TITLES: Record<string, string> = {
   location: "Locations",
-  type: "Types",
+  tag: "Tags",
   species: "Species",
 };
 
@@ -43,7 +50,7 @@ export default function BrowseEntriesScreen() {
 
   const [plants, setPlants] = useState<PlantListItem[]>([]);
   const [shapes, setShapes] = useState<LocationShape[]>([]);
-  const [types, setTypes] = useState<PlantType[]>([]);
+  const [tags, setTags] = useState<Tag[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -57,11 +64,11 @@ export default function BrowseEntriesScreen() {
       const [pRes, sRes, tRes] = await Promise.all([
         listPlants(token),
         listLocationShapes(token),
-        listPlantTypes(token),
+        listTags(token),
       ]);
       if (pRes.ok) setPlants(pRes.data.plants);
       if (sRes.ok) setShapes(sRes.data.shapes);
-      if (tRes.ok) setTypes(tRes.data.types);
+      if (tRes.ok) setTags(tRes.data.tags);
       setLoading(false);
     })();
   }, [token]);
@@ -69,10 +76,17 @@ export default function BrowseEntriesScreen() {
   const entries: Entry[] = useMemo(() => {
     const cat = route.params.category;
     if (cat === "location") {
-      const counts = new Map<string | null, number>();
+      const counts = new Map<string, number>();
+      let unassignedCount = 0;
       for (const p of plants) {
-        const k = p.locationShapeId;
-        counts.set(k, (counts.get(k) ?? 0) + 1);
+        const ids = shapeIdsForPlant(p, shapes);
+        if (ids.size === 0) {
+          unassignedCount += 1;
+          continue;
+        }
+        for (const id of ids) {
+          counts.set(id, (counts.get(id) ?? 0) + 1);
+        }
       }
       const named: Entry[] = shapes
         .map((s) => ({
@@ -86,7 +100,6 @@ export default function BrowseEntriesScreen() {
           },
         }))
         .sort((a, b) => a.label.localeCompare(b.label));
-      const unassignedCount = counts.get(null) ?? 0;
       if (unassignedCount > 0) {
         named.push({
           key: "__unassigned",
@@ -97,28 +110,34 @@ export default function BrowseEntriesScreen() {
       }
       return named;
     }
-    if (cat === "type") {
-      const counts = new Map<string | null, number>();
+    if (cat === "tag") {
+      const counts = new Map<string, number>();
+      let unassignedCount = 0;
       for (const p of plants) {
-        const k = p.type?.id ?? null;
-        counts.set(k, (counts.get(k) ?? 0) + 1);
+        if (p.tags.length === 0) {
+          unassignedCount += 1;
+          continue;
+        }
+        for (const t of p.tags) {
+          counts.set(t.id, (counts.get(t.id) ?? 0) + 1);
+        }
       }
-      const named: Entry[] = types
+      const named: Entry[] = tags
         .map((t) => ({
           key: t.id,
           label: t.name,
           count: counts.get(t.id) ?? 0,
-          filter: { kind: "type" as const, typeId: t.id, label: t.name },
+          color: t.color,
+          filter: { kind: "tag" as const, tagId: t.id, label: t.name },
         }))
         .filter((e) => e.count > 0)
         .sort((a, b) => a.label.localeCompare(b.label));
-      const unassignedCount = counts.get(null) ?? 0;
       if (unassignedCount > 0) {
         named.push({
           key: "__unassigned",
-          label: "Unassigned",
+          label: "Untagged",
           count: unassignedCount,
-          filter: { kind: "type", typeId: null, label: "Unassigned" },
+          filter: { kind: "tag", tagId: null, label: "Untagged" },
         });
       }
       return named;
@@ -150,7 +169,7 @@ export default function BrowseEntriesScreen() {
       });
     }
     return named;
-  }, [plants, shapes, types, route.params.category]);
+  }, [plants, shapes, tags, route.params.category]);
 
   if (loading) {
     return (
@@ -180,6 +199,9 @@ export default function BrowseEntriesScreen() {
             nav.navigate("PlantList", { filter: item.filter, title: item.label })
           }
         >
+          {item.color && (
+            <View style={[styles.tagDot, { backgroundColor: item.color }]} />
+          )}
           <Text style={styles.rowLabel}>{item.label}</Text>
           <View style={styles.rowRight}>
             <Text style={styles.rowCount}>{item.count}</Text>
@@ -207,9 +229,14 @@ const styles = StyleSheet.create({
     borderBottomColor: "#e5e5e5",
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    gap: 10,
   },
-  rowLabel: { fontSize: 16, color: "#171717", flexShrink: 1 },
+  tagDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
+  rowLabel: { fontSize: 16, color: "#171717", flex: 1 },
   rowRight: { flexDirection: "row", alignItems: "center", gap: 8 },
   rowCount: { fontSize: 14, color: "#737373" },
 });

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Alert,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
@@ -20,6 +22,24 @@ import {
   type BarcodeType,
 } from "../lib/scannerTypes";
 import { clearImageCache, getImageCacheBytes } from "../lib/imageCache";
+import {
+  createTag,
+  deleteTag,
+  listTags,
+  updateTag,
+  type Tag,
+} from "../lib/api";
+
+const TAG_COLORS = [
+  "#16a34a",
+  "#0ea5e9",
+  "#eab308",
+  "#f97316",
+  "#dc2626",
+  "#a855f7",
+  "#ec4899",
+  "#525252",
+];
 
 export default function SettingsScreen() {
   const { state, signOut } = useAuth();
@@ -42,6 +62,8 @@ export default function SettingsScreen() {
           <Text style={styles.value}>{state.user.username}</Text>
         </View>
 
+        <TagsSection token={state.token} />
+
         <ScannerSection />
 
         <StorageSection />
@@ -49,9 +71,200 @@ export default function SettingsScreen() {
         <TouchableOpacity style={styles.button} onPress={confirmSignOut}>
           <Text style={styles.buttonText}>Sign out</Text>
         </TouchableOpacity>
-        <Text style={styles.note}>User and plant-type management coming soon.</Text>
+        <Text style={styles.note}>User management coming soon.</Text>
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+type TagEditor =
+  | { mode: "create"; name: string; color: string }
+  | { mode: "edit"; id: string; name: string; color: string };
+
+function TagsSection({ token }: { token: string }) {
+  const [tags, setTags] = useState<Tag[] | null>(null);
+  const [editor, setEditor] = useState<TagEditor | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const reload = useCallback(async () => {
+    const r = await listTags(token);
+    if (r.ok) setTags(r.data.tags);
+  }, [token]);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  function openCreate() {
+    setEditor({ mode: "create", name: "", color: TAG_COLORS[0]! });
+  }
+
+  function openEdit(tag: Tag) {
+    setEditor({ mode: "edit", id: tag.id, name: tag.name, color: tag.color });
+  }
+
+  async function save() {
+    if (!editor) return;
+    const name = editor.name.trim();
+    if (!name) {
+      Alert.alert("Name required");
+      return;
+    }
+    setSaving(true);
+    const r =
+      editor.mode === "create"
+        ? await createTag(token, { name, color: editor.color })
+        : await updateTag(token, editor.id, { name, color: editor.color });
+    setSaving(false);
+    if (!r.ok) {
+      Alert.alert(
+        "Save failed",
+        r.error === "duplicate_name" ? "A tag with that name already exists." : r.error,
+      );
+      return;
+    }
+    setEditor(null);
+    await reload();
+  }
+
+  function confirmDelete(tag: Tag) {
+    Alert.alert(
+      `Delete "${tag.name}"?`,
+      "This will remove the tag from every plant that has it.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            const r = await deleteTag(token, tag.id);
+            if (!r.ok) {
+              Alert.alert("Delete failed", r.error);
+              return;
+            }
+            await reload();
+          },
+        },
+      ],
+    );
+  }
+
+  return (
+    <View style={styles.section}>
+      <View style={styles.tagsHeader}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.sectionTitle}>Tags</Text>
+          <Text style={styles.sectionHint}>
+            Plants can have any number of tags. Tap a tag to edit, or use the
+            trash icon to delete.
+          </Text>
+        </View>
+        <Pressable
+          onPress={openCreate}
+          style={({ pressed }) => [
+            styles.addTagBtn,
+            pressed && { opacity: 0.7 },
+          ]}
+          accessibilityLabel="Add tag"
+        >
+          <Ionicons name="add" size={20} color="#fff" />
+        </Pressable>
+      </View>
+      {tags === null ? (
+        <Text style={styles.tagsEmpty}>Loading…</Text>
+      ) : tags.length === 0 ? (
+        <Text style={styles.tagsEmpty}>No tags yet.</Text>
+      ) : (
+        tags.map((t) => (
+          <View key={t.id} style={styles.tagRow}>
+            <Pressable style={styles.tagRowMain} onPress={() => openEdit(t)}>
+              <View style={[styles.tagBubble, { backgroundColor: t.color }]}>
+                <Text style={styles.tagBubbleText} numberOfLines={1}>
+                  {t.name}
+                </Text>
+              </View>
+            </Pressable>
+            <Pressable
+              onPress={() => confirmDelete(t)}
+              hitSlop={10}
+              accessibilityLabel={`Delete ${t.name}`}
+            >
+              <Ionicons name="trash-outline" size={20} color="#dc2626" />
+            </Pressable>
+          </View>
+        ))
+      )}
+
+      <Modal
+        visible={editor !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setEditor(null)}
+      >
+        {editor && (
+          <Pressable
+            style={styles.modalBackdrop}
+            onPress={() => setEditor(null)}
+          >
+            <Pressable style={styles.modalSheet} onPress={() => {}}>
+              <Text style={styles.modalTitle}>
+                {editor.mode === "create" ? "New tag" : "Edit tag"}
+              </Text>
+              <Text style={styles.modalLabel}>Name</Text>
+              <TextInput
+                value={editor.name}
+                onChangeText={(v) =>
+                  setEditor((cur) => (cur ? { ...cur, name: v } : cur))
+                }
+                style={styles.modalInput}
+                placeholder="e.g. Rose"
+                autoFocus
+              />
+              <Text style={styles.modalLabel}>Color</Text>
+              <View style={styles.swatchRow}>
+                {TAG_COLORS.map((c) => (
+                  <Pressable
+                    key={c}
+                    onPress={() =>
+                      setEditor((cur) => (cur ? { ...cur, color: c } : cur))
+                    }
+                    style={[
+                      styles.swatch,
+                      { backgroundColor: c },
+                      editor.color === c && styles.swatchActive,
+                    ]}
+                  />
+                ))}
+              </View>
+              <Text style={styles.modalLabel}>Preview</Text>
+              <View style={[styles.tagBubble, { backgroundColor: editor.color, alignSelf: "flex-start" }]}>
+                <Text style={styles.tagBubbleText}>
+                  {editor.name.trim() || "Tag name"}
+                </Text>
+              </View>
+              <View style={styles.modalButtons}>
+                <TouchableOpacity
+                  onPress={() => setEditor(null)}
+                  style={styles.modalCancel}
+                  disabled={saving}
+                >
+                  <Text style={styles.modalCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={save}
+                  style={[styles.modalSave, saving && { opacity: 0.5 }]}
+                  disabled={saving}
+                >
+                  <Text style={styles.modalSaveText}>
+                    {saving ? "Saving…" : "Save"}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </Pressable>
+          </Pressable>
+        )}
+      </Modal>
+    </View>
   );
 }
 
@@ -240,4 +453,94 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   clearButtonText: { color: "#171717", fontSize: 15, fontWeight: "500" },
+
+  tagsHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+  addTagBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#16a34a",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 2,
+  },
+  tagsEmpty: {
+    paddingVertical: 12,
+    color: "#a3a3a3",
+    fontSize: 14,
+  },
+  tagRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderColor: "#e5e5e5",
+  },
+  tagRowMain: { flex: 1 },
+  tagBubble: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    alignSelf: "flex-start",
+    maxWidth: "100%",
+  },
+  tagBubbleText: { color: "#fff", fontSize: 13, fontWeight: "500" },
+
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    padding: 24,
+  },
+  modalSheet: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 16,
+    maxHeight: "80%",
+  },
+  modalTitle: { fontSize: 18, fontWeight: "600", marginBottom: 12 },
+  modalLabel: {
+    fontSize: 12,
+    color: "#737373",
+    textTransform: "uppercase",
+    marginTop: 12,
+    marginBottom: 6,
+  },
+  modalInput: {
+    borderWidth: 1,
+    borderColor: "#d4d4d4",
+    borderRadius: 6,
+    padding: 10,
+    fontSize: 15,
+    color: "#171717",
+  },
+  swatchRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  swatch: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 2,
+    borderColor: "#fff",
+  },
+  swatchActive: { borderColor: "#171717" },
+  modalButtons: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    marginTop: 16,
+    gap: 8,
+  },
+  modalCancel: { paddingVertical: 8, paddingHorizontal: 14 },
+  modalCancelText: { color: "#525252", fontSize: 15 },
+  modalSave: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    backgroundColor: "#171717",
+    borderRadius: 6,
+  },
+  modalSaveText: { color: "#fff", fontSize: 15, fontWeight: "500" },
 });
