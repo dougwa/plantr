@@ -49,6 +49,7 @@ import type { RootStackParamList } from "../navigation/types";
 const METERS_PER_DEGREE_LAT = 111_320;
 const CLUSTER_RADIUS_M = 5;
 const MIN_HALF_M = 0.5; // minimum half-width/height in meters
+const DOUBLE_TAP_MS = 300;
 // Action-icon position is computed in pixels and converted to meters using
 // the current zoom. We enforce three pixel-space constraints; whichever
 // requires the largest offset wins.
@@ -380,7 +381,25 @@ export default function MapScreen() {
     setEditingId(r.data.shape.id);
   }
 
-  function onMapPress(_e: MapPressEvent) {
+  // Double-tap on a shape opens its plant list. We track the last tap so a
+  // second tap on the same shape within DOUBLE_TAP_MS triggers navigation;
+  // otherwise the tap behaves as a "tap to lock" gesture.
+  const lastTapRef = useRef<{ time: number; shapeId: string | null }>({
+    time: 0,
+    shapeId: null,
+  });
+
+  function onMapPress(e: MapPressEvent) {
+    const now = Date.now();
+    const s = findShapeAt(e.nativeEvent.coordinate);
+    const last = lastTapRef.current;
+    lastTapRef.current = { time: now, shapeId: s?.id ?? null };
+
+    if (s && last.shapeId === s.id && now - last.time < DOUBLE_TAP_MS) {
+      lastTapRef.current = { time: 0, shapeId: null };
+      viewPlantsAtShape(s);
+      return;
+    }
     setEditingId(null);
   }
 
@@ -438,40 +457,9 @@ export default function MapScreen() {
     );
   }
 
-  function showShapeMenu(s: LocationShape) {
-    const title =
-      s.name?.trim() || (s.kind === "property" ? "Property" : "Location");
-    if (Platform.OS === "ios") {
-      ActionSheetIOS.showActionSheetWithOptions(
-        {
-          options: ["Cancel", "Edit", "View Plants", "Delete"],
-          cancelButtonIndex: 0,
-          destructiveButtonIndex: 3,
-          title,
-        },
-        (i) => {
-          if (i === 1) setEditingId(s.id);
-          else if (i === 2) viewPlantsAtShape(s);
-          else if (i === 3) setSubModal({ kind: "delete", shapeId: s.id });
-        },
-      );
-    } else {
-      Alert.alert(title, undefined, [
-        { text: "Cancel", style: "cancel" },
-        { text: "Edit", onPress: () => setEditingId(s.id) },
-        { text: "View Plants", onPress: () => viewPlantsAtShape(s) },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: () => setSubModal({ kind: "delete", shapeId: s.id }),
-        },
-      ]);
-    }
-  }
-
   function onMapLongPress(e: LongPressEvent) {
     const s = findShapeAt(e.nativeEvent.coordinate);
-    if (s) showShapeMenu(s);
+    if (s) setEditingId(s.id);
   }
 
   function onMarkerPress(p: PlantListItem) {
@@ -872,7 +860,7 @@ export default function MapScreen() {
           <Text style={styles.helpText}>
             {editing
               ? "Drag center to move · sides to resize · rotator to rotate · tap map to finish"
-              : "Long-press a location for options · Tap a marker for details"}
+              : "Long-press a location to edit · Double-tap to view its plants"}
           </Text>
         </View>
       </SafeAreaView>
