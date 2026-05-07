@@ -22,6 +22,12 @@ type Tile = {
 
 const TILES: Tile[] = [
   {
+    key: "search",
+    label: "Search",
+    icon: "search-outline",
+    onPress: (nav) => nav.navigate("BrowseSearch"),
+  },
+  {
     key: "location",
     label: "Location",
     icon: "location-outline",

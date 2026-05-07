@@ -17,10 +17,12 @@ import { useAuth } from "../contexts/AuthContext";
 import {
   ALL_BARCODE_TYPES,
   BARCODE_LABELS,
+  BARCODE_IMAGES,
   loadEnabledBarcodeTypes,
   saveEnabledBarcodeTypes,
   type BarcodeType,
 } from "../lib/scannerTypes";
+import { Image } from 'expo-image';
 import { clearImageCache, getImageCacheBytes } from "../lib/imageCache";
 import {
   createTag,
@@ -293,7 +295,7 @@ function ScannerSection() {
 
   return (
     <View style={styles.section}>
-      <Text style={styles.sectionTitle}>Scanner</Text>
+      <Text style={styles.sectionTitle}>Barcode Formats</Text>
       <Text style={styles.sectionHint}>
         Choose which barcode formats the scanner will recognize.
       </Text>
@@ -309,12 +311,22 @@ function ScannerSection() {
             onPress={() => toggle(t)}
             disabled={enabled === null}
           >
-            <Text style={styles.toggleLabel}>{BARCODE_LABELS[t]}</Text>
-            <Ionicons
-              name={on ? "checkbox" : "square-outline"}
-              size={24}
-              color={on ? "#16a34a" : "#a3a3a3"}
-            />
+            <Text style={[styles.toggleLabel, styles.barcodeLabel]}>
+              {BARCODE_LABELS[t]}
+            </Text>
+            <View style={styles.barcodeImageCell}>
+              <Image
+                source={BARCODE_IMAGES[t]}
+                style={{ width: 40, height: 40 }}
+              />
+            </View>
+            <View style={styles.barcodeCheckCell}>
+              <Ionicons
+                name={on ? "checkbox" : "square-outline"}
+                size={24}
+                color={on ? "#16a34a" : "#a3a3a3"}
+              />
+            </View>
           </Pressable>
         );
       })}
@@ -432,6 +444,15 @@ const styles = StyleSheet.create({
     borderBottomColor: "#e5e5e5",
   },
   toggleLabel: { fontSize: 16, color: "#171717" },
+  barcodeLabel: { flex: 1 },
+  barcodeImageCell: {
+    width: 100,
+    alignItems: "center",
+  },
+  barcodeCheckCell: {
+    width: 32,
+    alignItems: "flex-end",
+  },
   button: {
     marginTop: 32,
     backgroundColor: "#fff",

@@ -1,6 +1,7 @@
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import BrowseHomeScreen from "../screens/browse/BrowseHomeScreen";
 import BrowseEntriesScreen from "../screens/browse/BrowseEntriesScreen";
+import BrowseSearchScreen from "../screens/browse/BrowseSearchScreen";
 import PlantListScreen from "../screens/browse/PlantListScreen";
 import type { BrowseStackParamList } from "./BrowseStackTypes";
 
@@ -15,6 +16,11 @@ export default function BrowseStack() {
         options={{ headerShown: false, title: "Browse" }}
       />
       <Stack.Screen name="BrowseEntries" component={BrowseEntriesScreen} />
+      <Stack.Screen
+        name="BrowseSearch"
+        component={BrowseSearchScreen}
+        options={{ title: "Search" }}
+      />
       <Stack.Screen name="PlantList" component={PlantListScreen} />
     </Stack.Navigator>
   );

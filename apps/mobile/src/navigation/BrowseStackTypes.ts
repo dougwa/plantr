@@ -10,4 +10,5 @@ export type BrowseStackParamList = {
   BrowseHome: undefined;
   BrowseEntries: { category: BrowseCategory };
   PlantList: { filter: PlantFilter; title: string };
+  BrowseSearch: undefined;
 };

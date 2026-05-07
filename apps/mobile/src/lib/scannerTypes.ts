@@ -34,6 +34,23 @@ export const BARCODE_LABELS: Record<BarcodeType, string> = {
   upc_e: "UPC-E",
 };
 
+export const BARCODE_IMAGES: Record<BarcodeType, string> = {
+  qr: require('../assets/QRCode.webp'),
+  aztec: require('../assets/Aztec.webp'),
+  datamatrix: require('../assets/DataMatrix.webp'),
+  pdf417: require('../assets/PDF417.webp'),
+  code128: require('../assets/Code128.webp'),
+  code39: require('../assets/Code39.webp'),
+  code93: require('../assets/Code93.webp'),
+  codabar: require('../assets/Codabar.webp'),
+  ean13: require('../assets/EAN-13.png'),
+  ean8: require('../assets/EAN-8.png'),
+  itf14: require('../assets/ITF-14.png'),
+  upc_a: require('../assets/UPC-A.png'),
+  upc_e: require('../assets/UPC-E.png'),
+}
+
+
 const STORAGE_KEY = "plantr.scannerTypes";
 const KNOWN_SET = new Set<string>(ALL_BARCODE_TYPES);
 
