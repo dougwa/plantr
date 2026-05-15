@@ -5,7 +5,6 @@ import {
   Alert,
   Dimensions,
   Modal,
-  PanResponder,
   Platform,
   Pressable,
   ScrollView,
@@ -52,10 +51,6 @@ const METERS_PER_DEGREE_LAT = 111_320;
 const CLUSTER_RADIUS_M = 5;
 const MIN_HALF_M = 0.5; // minimum half-width/height in meters
 const DOUBLE_TAP_MS = 300;
-// Touches within this many pixels of the shape boundary trigger a resize
-// (corner resize when within range of two adjacent edges); touches deeper
-// inside trigger a move.
-const EDGE_THRESHOLD_PX = 40;
 // Action-icon position is computed in pixels and converted to meters using
 // the current zoom. We enforce three pixel-space constraints; whichever
 // requires the largest offset wins.
@@ -294,9 +289,6 @@ export default function MapScreen() {
   const [initialCamera, setInitialCamera] = useState<Camera | null>(null);
   const [initialReady, setInitialReady] = useState(false);
   const [viewportZoom, setViewportZoom] = useState<number | null>(null);
-  // Bumped whenever the map viewport changes so MoveOverlay re-projects the
-  // editing shape's screen-space center.
-  const [viewportRev, setViewportRev] = useState(0);
   const hasSavedViewRef = useRef(false);
   const lastFitCountRef = useRef(0);
 
@@ -632,7 +624,6 @@ export default function MapScreen() {
     hasSavedViewRef.current = true;
     const zoom = cam.zoom ?? zoomFromLongitudeDelta(region.longitudeDelta);
     setViewportZoom(zoom);
-    setViewportRev((n) => n + 1);
     saveViewport({
       center: cam.center,
       pitch: cam.pitch ?? 0,
@@ -1054,6 +1045,10 @@ export default function MapScreen() {
               iconOffsetM={iconOffsetM}
               halfW={editingHalfDims.halfW}
               halfH={editingHalfDims.halfH}
+              onMove={(lat, lng) =>
+                applyMove({ latitude: lat, longitude: lng })
+              }
+              onMoveEnd={persistMove}
               onVertexDrag={applyPolygonVertex}
               onVertexDragEnd={persistPolygonVertex}
               onAddPoint={addPolygonPoint}
@@ -1067,7 +1062,6 @@ export default function MapScreen() {
           : editing && <EditOverlay
               shape={editing}
               iconOffsetM={iconOffsetM}
-              zoom={viewportZoom}
               onMove={(lat, lng) =>
                 applyMove({ latitude: lat, longitude: lng })
               }
@@ -1088,17 +1082,6 @@ export default function MapScreen() {
             />
         }
       </MapView>
-
-      {editing && (
-        <MoveOverlay
-          mapRef={mapRef}
-          shape={editing}
-          viewportRev={viewportRev}
-          onMove={(lat, lng) => applyMove({ latitude: lat, longitude: lng })}
-          onMoveEnd={persistMove}
-          onTap={handleTap}
-        />
-      )}
 
       <SafeAreaView style={styles.fabSafe} edges={["bottom"]} pointerEvents="box-none">
         <Pressable
@@ -1124,8 +1107,8 @@ export default function MapScreen() {
           <Text style={styles.helpText}>
             {editing
               ? editing.kind === "polygon"
-                ? "Drag vertices to reshape · drag inside to move · +/− to add or remove points · tap map to finish"
-                : "Drag inside to move · drag the edge to resize · rotator to rotate · tap map to finish"
+                ? "Drag vertices to reshape · drag center to move · +/− to add or remove points · tap map to finish"
+                : "Drag center to move · drag the edge to resize · rotator to rotate · tap map to finish"
               : "Long-press a location to edit · Double-tap to view its plants"}
           </Text>
         </View>
@@ -1167,7 +1150,6 @@ export default function MapScreen() {
 type EditOverlayProps = {
   shape: LocationShape;
   iconOffsetM: number;
-  zoom: number | null;
   onMove: (centerLat: number, centerLng: number) => void;
   onMoveEnd: () => void;
   onResize: (next: {
@@ -1187,7 +1169,6 @@ type EditOverlayProps = {
 function EditOverlay({
   shape,
   iconOffsetM,
-  zoom,
   onMove,
   onMoveEnd,
   onResize,
@@ -1211,7 +1192,6 @@ function EditOverlay({
     <>
       <ShapeBodyEditor
         shape={shape}
-        zoom={zoom}
         onMove={onMove}
         onMoveEnd={onMoveEnd}
         onResize={onResize}
@@ -1298,19 +1278,14 @@ const HANDLES: HandleSpec[] = [
   { sx: -1, sy: -1 }, // SW corner
 ];
 
-// Floor on the per-axis hit zone so handles stay tappable on small shapes.
-const MIN_HANDLE_PX = 24;
-
 function ShapeBodyEditor({
   shape,
-  zoom,
   onMove,
   onMoveEnd,
   onResize,
   onResizeEnd,
 }: {
   shape: LocationShape;
-  zoom: number | null;
   onMove: (centerLat: number, centerLng: number) => void;
   onMoveEnd: () => void;
   onResize: (next: {
@@ -1384,11 +1359,6 @@ function ShapeBodyEditor({
     else onResizeEnd();
   }
 
-  if (zoom == null) return null;
-  const mpp = metersPerPixel(zoom, shape.centerLat);
-  const widthPx = Math.max(1, shape.widthMeters / mpp);
-  const heightPx = Math.max(1, shape.heightMeters / mpp);
-
   const halfW = shape.widthMeters / 2;
   const halfH = shape.heightMeters / 2;
 
@@ -1407,9 +1377,8 @@ function ShapeBodyEditor({
         const rotate = `${-shape.rotationDegrees}deg`;
 
         if (isMove) {
-          // Move handle covers the whole shape with a transparent hit area.
-          // tracksViewChanges defaults to true so the hit area resizes with
-          // zoom and re-snapshots when rotation changes.
+          // Small central move handle. Long-press to drag (iOS MapKit
+          // requirement on draggable Markers).
           return (
             <Marker
               key="handle-move"
@@ -1417,21 +1386,14 @@ function ShapeBodyEditor({
               anchor={{ x: 0.5, y: 0.5 }}
               zIndex={1}
               draggable
+              tracksViewChanges={false}
               onDragStart={handleDragStart}
               onDrag={(e) => handleDrag(0, 0, e.nativeEvent.coordinate)}
               onDragEnd={() => handleDragEnd(0, 0)}
             >
-              <View
-                style={{
-                  width: Math.max(MIN_HANDLE_PX, widthPx),
-                  height: Math.max(MIN_HANDLE_PX, heightPx),
-                  alignItems: "center",
-                  justifyContent: "center",
-                  backgroundColor: "transparent",
-                  transform: [{ rotate }],
-                }}
-              >
-                <View style={styles.handleDot} />
+              <View style={styles.handleHit}>
+                <View style={styles.moveTargetRing} />
+                <View style={styles.moveTargetDot} />
               </View>
             </Marker>
           );
@@ -1476,25 +1438,45 @@ function ShapeBodyEditor({
   );
 }
 
-// ---- screen-space tap-and-drag move overlay --------------------------------
-// react-native-maps' Marker.draggable requires a long-press to begin dragging
-// on iOS (MapKit), so the existing interior move Marker can't satisfy a plain
-// tap-and-drag. This overlay sits above the MapView in RN's view hierarchy
-// and uses a PanResponder to capture pans inside the editing shape, then
-// ---- polygon body: one draggable vertex handle per point -------------------
+// ---- polygon body: central move handle + one draggable vertex handle per point
 
 function PolygonBodyEditor({
   shape,
+  onMove,
+  onMoveEnd,
   onVertexDrag,
   onVertexDragEnd,
 }: {
   shape: LocationShape;
+  onMove: (centerLat: number, centerLng: number) => void;
+  onMoveEnd: () => void;
   onVertexDrag: (idx: number, coord: LatLng) => void;
   onVertexDragEnd: () => void;
 }) {
   const pts = shape.polygonPoints ?? [];
   return (
     <>
+      <Marker
+        key="polygon-move"
+        coordinate={{ latitude: shape.centerLat, longitude: shape.centerLng }}
+        anchor={{ x: 0.5, y: 0.5 }}
+        zIndex={1}
+        draggable
+        tracksViewChanges={false}
+        onDrag={(e) =>
+          onMove(
+            e.nativeEvent.coordinate.latitude,
+            e.nativeEvent.coordinate.longitude,
+          )
+        }
+        onDragEnd={onMoveEnd}
+      >
+        <View style={styles.handleHit}>
+          <View style={styles.moveTargetRing} />
+          <View style={styles.moveTargetDot} />
+        </View>
+      </Marker>
+
       {pts.map((p, idx) => (
         <Marker
           key={`vertex-${idx}`}
@@ -1522,6 +1504,8 @@ function PolygonEditOverlay({
   iconOffsetM,
   halfW,
   halfH,
+  onMove,
+  onMoveEnd,
   onVertexDrag,
   onVertexDragEnd,
   onAddPoint,
@@ -1534,6 +1518,8 @@ function PolygonEditOverlay({
   iconOffsetM: number;
   halfW: number;
   halfH: number;
+  onMove: (centerLat: number, centerLng: number) => void;
+  onMoveEnd: () => void;
   onVertexDrag: (idx: number, coord: LatLng) => void;
   onVertexDragEnd: () => void;
   onAddPoint: () => void;
@@ -1542,17 +1528,42 @@ function PolygonEditOverlay({
   onTapColor: () => void;
   onTapDelete: () => void;
 }) {
-  const nameAt = localToLatLng(shape, halfW + iconOffsetM, 0);
-  const colorAt = localToLatLng(shape, -halfW - iconOffsetM, 0);
-  const deleteAt = localToLatLng(shape, 0, -halfH - iconOffsetM);
-  const addAt = localToLatLng(shape, iconOffsetM * 1.5, halfH + iconOffsetM);
-  const removeAt = localToLatLng(shape, -iconOffsetM * 1.5, halfH + iconOffsetM);
+  // Anchor action chips to the polygon's vertex bounding-box center rather
+  // than its centroid so they sit at predictable offsets from the polygon's
+  // visual extent even when an asymmetric vertex drag has pulled the
+  // centroid away from the bbox center.
+  const pts = shape.polygonPoints ?? [];
+  let minLat = pts[0]?.lat ?? shape.centerLat;
+  let maxLat = minLat;
+  let minLng = pts[0]?.lng ?? shape.centerLng;
+  let maxLng = minLng;
+  for (const p of pts) {
+    if (p.lat < minLat) minLat = p.lat;
+    if (p.lat > maxLat) maxLat = p.lat;
+    if (p.lng < minLng) minLng = p.lng;
+    if (p.lng > maxLng) maxLng = p.lng;
+  }
+  const bboxLat = (minLat + maxLat) / 2;
+  const bboxLng = (minLng + maxLng) / 2;
+  const bboxCosLat = Math.cos((bboxLat * Math.PI) / 180);
+  const offsetFromBbox = (xMeters: number, yMeters: number): LatLng => ({
+    latitude: bboxLat + yMeters / METERS_PER_DEGREE_LAT,
+    longitude: bboxLng + xMeters / (METERS_PER_DEGREE_LAT * bboxCosLat),
+  });
+
+  const nameAt = offsetFromBbox(halfW + iconOffsetM, 0);
+  const colorAt = offsetFromBbox(-halfW - iconOffsetM, 0);
+  const deleteAt = offsetFromBbox(0, -halfH - iconOffsetM);
+  const addAt = offsetFromBbox(iconOffsetM * 1.5, halfH + iconOffsetM);
+  const removeAt = offsetFromBbox(-iconOffsetM * 1.5, halfH + iconOffsetM);
   const canRemove = (shape.polygonPoints?.length ?? 0) > 3;
 
   return (
     <>
       <PolygonBodyEditor
         shape={shape}
+        onMove={onMove}
+        onMoveEnd={onMoveEnd}
         onVertexDrag={onVertexDrag}
         onVertexDragEnd={onVertexDragEnd}
       />
@@ -1597,184 +1608,6 @@ function PolygonEditOverlay({
         </View>
       </Marker>
     </>
-  );
-}
-
-// ---- screen-space tap-and-drag move overlay --------------------------------
-// react-native-maps' Marker.draggable requires a long-press to begin dragging
-// on iOS (MapKit), so the existing interior move Marker can't satisfy a plain
-// tap-and-drag. This overlay sits above the MapView in RN's view hierarchy
-// and uses a PanResponder to capture pans inside the editing shape, then
-// projects touch points to map coords via mapRef.coordinateForPoint. The
-// catcher is shrunk by EDGE_THRESHOLD_PX so the resize-handle Markers at the
-// shape boundary still receive their touches.
-function MoveOverlay({
-  mapRef,
-  shape,
-  viewportRev,
-  onMove,
-  onMoveEnd,
-  onTap,
-}: {
-  mapRef: React.RefObject<MapView | null>;
-  shape: LocationShape;
-  viewportRev: number;
-  onMove: (lat: number, lng: number) => void;
-  onMoveEnd: () => void;
-  onTap: (coord: LatLng) => void;
-}) {
-  // Screen-space AABB of the shape's bounding rectangle. We get this by
-  // projecting each of the shape's four local-frame corners through the
-  // map. This avoids depending on a zoom value (Apple Maps doesn't always
-  // report `Camera.zoom`, so deriving meters-per-pixel from zoom would
-  // leave the overlay un-rendered on iOS).
-  const [aabb, setAabb] = useState<{
-    minX: number;
-    maxX: number;
-    minY: number;
-    maxY: number;
-  } | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!mapRef.current) return;
-      try {
-        const corners: LatLng[] =
-          shape.kind === "polygon" && shape.polygonPoints?.length
-            ? shape.polygonPoints.map((p) => ({ latitude: p.lat, longitude: p.lng }))
-            : (() => {
-                const halfW = shape.widthMeters / 2;
-                const halfH = shape.heightMeters / 2;
-                return [
-                  localToLatLng(shape, -halfW, -halfH),
-                  localToLatLng(shape, halfW, -halfH),
-                  localToLatLng(shape, halfW, halfH),
-                  localToLatLng(shape, -halfW, halfH),
-                ];
-              })();
-        const pts = await Promise.all(
-          corners.map((c) => mapRef.current!.pointForCoordinate(c)),
-        );
-        if (cancelled) return;
-        let minX = pts[0]!.x;
-        let maxX = pts[0]!.x;
-        let minY = pts[0]!.y;
-        let maxY = pts[0]!.y;
-        for (const p of pts) {
-          if (p.x < minX) minX = p.x;
-          if (p.x > maxX) maxX = p.x;
-          if (p.y < minY) minY = p.y;
-          if (p.y > maxY) maxY = p.y;
-        }
-        setAabb({ minX, maxX, minY, maxY });
-      } catch {
-        // ignore — projection can fail briefly during map setup
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    shape,
-    viewportRev,
-    mapRef,
-  ]);
-
-  // Shrink the catcher by EDGE_THRESHOLD_PX so the boundary resize-handle
-  // Markers still receive their touches.
-  const layout = useMemo(() => {
-    if (!aabb) return null;
-    const left = aabb.minX + EDGE_THRESHOLD_PX;
-    const top = aabb.minY + EDGE_THRESHOLD_PX;
-    const width = aabb.maxX - aabb.minX - 2 * EDGE_THRESHOLD_PX;
-    const height = aabb.maxY - aabb.minY - 2 * EDGE_THRESHOLD_PX;
-    if (width <= 0 || height <= 0) return null;
-    return { left, top, width, height };
-  }, [aabb]);
-
-  // PanResponder reads layout/callbacks via refs so we never re-create it
-  // mid-gesture (which would break in-progress drags).
-  const layoutRef = useRef(layout);
-  layoutRef.current = layout;
-  const onMoveRef = useRef(onMove);
-  onMoveRef.current = onMove;
-  const onMoveEndRef = useRef(onMoveEnd);
-  onMoveEndRef.current = onMoveEnd;
-  const onTapRef = useRef(onTap);
-  onTapRef.current = onTap;
-  const movedRef = useRef(false);
-
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onPanResponderGrant: () => {
-          movedRef.current = false;
-        },
-        onPanResponderMove: (evt, gesture) => {
-          if (
-            !movedRef.current &&
-            (Math.abs(gesture.dx) > 4 || Math.abs(gesture.dy) > 4)
-          ) {
-            movedRef.current = true;
-          }
-          if (!movedRef.current) return;
-          const l = layoutRef.current;
-          if (!l) return;
-          const point = {
-            x: l.left + evt.nativeEvent.locationX,
-            y: l.top + evt.nativeEvent.locationY,
-          };
-          mapRef.current
-            ?.coordinateForPoint(point)
-            .then((coord) =>
-              onMoveRef.current(coord.latitude, coord.longitude),
-            )
-            .catch(() => {});
-        },
-        onPanResponderRelease: (evt) => {
-          if (movedRef.current) {
-            onMoveEndRef.current();
-          } else {
-            const l = layoutRef.current;
-            if (!l) return;
-            const point = {
-              x: l.left + evt.nativeEvent.locationX,
-              y: l.top + evt.nativeEvent.locationY,
-            };
-            mapRef.current
-              ?.coordinateForPoint(point)
-              .then((coord) => onTapRef.current(coord))
-              .catch(() => {});
-          }
-          movedRef.current = false;
-        },
-        onPanResponderTerminate: () => {
-          if (movedRef.current) onMoveEndRef.current();
-          movedRef.current = false;
-        },
-        onPanResponderTerminationRequest: () => false,
-      }),
-    [mapRef],
-  );
-
-  if (!layout) return null;
-
-  return (
-    <View
-      pointerEvents="auto"
-      collapsable={false}
-      style={{
-        position: "absolute",
-        left: layout.left,
-        top: layout.top,
-        width: layout.width,
-        height: layout.height,
-        backgroundColor: "transparent",
-      }}
-      {...panResponder.panHandlers}
-    />
   );
 }
 
@@ -1974,11 +1807,20 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "transparent",
   },
-  handleDot: {
+  moveTargetRing: {
+    position: "absolute",
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: "#171717",
+    backgroundColor: "rgba(255,255,255,0.6)",
+  },
+  moveTargetDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: "rgba(255,255,255,0.55)",
+    backgroundColor: "#171717",
   },
   handleHit: {
     width: 60,
