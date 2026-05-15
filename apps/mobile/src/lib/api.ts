@@ -154,6 +154,17 @@ export async function getPlantByQr(token: string, code: string) {
   });
 }
 
+export type CodeLookup =
+  | { type: "plant"; plant: PublicPlant }
+  | { type: "shape"; shape: LocationShape };
+
+export async function lookupCode(token: string, code: string) {
+  return request<CodeLookup>(`/codes/by-qr/${encodeURIComponent(code)}`, {
+    method: "GET",
+    token,
+  });
+}
+
 export async function createPlant(
   token: string,
   body: { qrCode: string; gpsLat?: number; gpsLng?: number },
@@ -286,6 +297,7 @@ export async function listPlants(token: string) {
 
 export type LocationShape = {
   id: string;
+  qrCode: string | null;
   name: string | null;
   kind: "rectangle" | "ellipse" | "property" | "polygon";
   color: string;

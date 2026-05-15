@@ -30,19 +30,25 @@ import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useAuth } from "../contexts/AuthContext";
 import {
   createPlant,
-  getPlantByQr,
+  listLocationShapes,
   listTags,
+  lookupCode,
+  patchLocationShape,
   patchPlant,
   recordAction,
   type ActionKind,
+  type LocationShape,
   type PublicPlant,
   type Tag,
 } from "../lib/api";
 import type { RootStackParamList } from "../navigation/types";
 import AuthImage from "../components/AuthImage";
 
+type ScanType = "ask" | "plant" | "shape";
+
 type BrushState = {
   enabled: boolean;
+  type: ScanType;
   tagIds: string[];
   species: string;
   description: string;
@@ -52,12 +58,15 @@ type BrushState = {
 
 const EMPTY_BRUSH: BrushState = {
   enabled: false,
+  type: "ask",
   tagIds: [],
   species: "",
   description: "",
   notes: "",
   actions: [],
 };
+
+type Pending = { code: string; gps: { lat?: number; lng?: number } };
 
 const ACTION_KINDS: {
   kind: ActionKind;
@@ -92,7 +101,11 @@ export default function ScanScreen() {
   const [brush, setBrush] = useState<BrushState>(EMPTY_BRUSH);
   const [brushModalOpen, setBrushModalOpen] = useState(false);
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
+  const [typePickerOpen, setTypePickerOpen] = useState(false);
+  const [shapePickerOpen, setShapePickerOpen] = useState(false);
+  const [pending, setPending] = useState<Pending | null>(null);
   const [tags, setTags] = useState<Tag[]>([]);
+  const [shapes, setShapes] = useState<LocationShape[]>([]);
   const [toast, setToast] = useState<Toast | null>(null);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -111,6 +124,9 @@ export default function ScanScreen() {
     if (state.status !== "authed") return;
     listTags(state.token).then((r) => {
       if (r.ok) setTags(r.data.tags);
+    });
+    listLocationShapes(state.token).then((r) => {
+      if (r.ok) setShapes(r.data.shapes);
     });
   }, [state]);
 
@@ -166,6 +182,77 @@ export default function ScanScreen() {
     return updated;
   }
 
+  function resetScan() {
+    setBusy(false);
+    setPending(null);
+    lastCodeRef.current = null;
+  }
+
+  function openShapeInBrowse(shape: LocationShape) {
+    nav.goBack();
+    nav.navigate("Tabs", {
+      screen: "Browse",
+      params: {
+        screen: "PlantList",
+        params: {
+          filter: {
+            kind: "location",
+            shapeId: shape.id,
+            label: shape.name ?? "Unnamed location",
+          },
+          title: shape.name ?? "Unnamed location",
+        },
+      },
+    });
+  }
+
+  async function createNewPlant(code: string, gps: { lat?: number; lng?: number }) {
+    if (state.status !== "authed") return;
+    const created = await createPlant(state.token, {
+      qrCode: code,
+      gpsLat: gps.lat,
+      gpsLng: gps.lng,
+    });
+    if (!created.ok) {
+      Alert.alert("Could not create plant", created.error);
+      resetScan();
+      return;
+    }
+    await finishWithPlant(created.data.plant, true);
+  }
+
+  async function finishWithPlant(plantIn: PublicPlant, isNew: boolean) {
+    let plant = plantIn;
+    if (brush.enabled) {
+      plant = await applyBrush(plant);
+      showToast({
+        id: plant.id,
+        qrCode: plant.qrCode,
+        name: plant.name,
+        thumbPath: plant.coverPhoto?.urls.thumb ?? null,
+        isNew,
+      });
+      setBusy(false);
+      setPending(null);
+      lastCodeRef.current = null;
+      return;
+    }
+    setPending(null);
+    nav.replace("PlantDetail", { plantId: plant.id });
+  }
+
+  async function bindCodeToShape(shape: LocationShape, code: string) {
+    if (state.status !== "authed") return;
+    const r = await patchLocationShape(state.token, shape.id, { qrCode: code });
+    if (!r.ok) {
+      Alert.alert("Could not bind code to shape", r.error);
+      resetScan();
+      return;
+    }
+    setShapes((prev) => prev.map((s) => (s.id === r.data.shape.id ? r.data.shape : s)));
+    openShapeInBrowse(r.data.shape);
+  }
+
   async function handleScan(code: string) {
     if (state.status !== "authed") return;
     if (busy) return;
@@ -175,12 +262,10 @@ export default function ScanScreen() {
 
     try {
       const gps = await getGps();
-      const found = await getPlantByQr(state.token, code);
-      let plant: PublicPlant;
-      let isNew = false;
+      const found = await lookupCode(state.token, code);
 
-      if (found.ok) {
-        plant = found.data.plant;
+      if (found.ok && found.data.type === "plant") {
+        let plant = found.data.plant;
         if (gps.lat !== undefined && gps.lng !== undefined) {
           const r = await patchPlant(state.token, plant.id, {
             gpsLat: gps.lat,
@@ -188,46 +273,63 @@ export default function ScanScreen() {
           });
           if (r.ok) plant = r.data.plant;
         }
-      } else if (found.status === 404) {
-        const created = await createPlant(state.token, {
-          qrCode: code,
-          gpsLat: gps.lat,
-          gpsLng: gps.lng,
-        });
-        if (!created.ok) {
-          Alert.alert("Could not create plant", created.error);
-          setBusy(false);
-          lastCodeRef.current = null;
-          return;
-        }
-        plant = created.data.plant;
-        isNew = true;
-      } else {
+        await finishWithPlant(plant, false);
+        return;
+      }
+
+      if (found.ok && found.data.type === "shape") {
+        openShapeInBrowse(found.data.shape);
+        setPending(null);
+        return;
+      }
+
+      if (!found.ok && found.status !== 404) {
         Alert.alert("Lookup failed", found.error);
-        setBusy(false);
-        lastCodeRef.current = null;
+        resetScan();
         return;
       }
 
-      if (brush.enabled) {
-        plant = await applyBrush(plant);
-        showToast({
-          id: plant.id,
-          qrCode: plant.qrCode,
-          name: plant.name,
-          thumbPath: plant.coverPhoto?.urls.thumb ?? null,
-          isNew,
-        });
-        setBusy(false);
-        return;
+      // New code. Resolve type from brush or prompt the user.
+      setPending({ code, gps });
+      if (brush.enabled && brush.type === "plant") {
+        await createNewPlant(code, gps);
+      } else if (brush.enabled && brush.type === "shape") {
+        setShapePickerOpen(true);
+      } else {
+        setTypePickerOpen(true);
       }
-
-      nav.replace("PlantDetail", { plantId: plant.id });
     } catch (err) {
       Alert.alert("Error", String(err));
-      setBusy(false);
-      lastCodeRef.current = null;
+      resetScan();
     }
+  }
+
+  async function onPickType(type: "plant" | "shape") {
+    setTypePickerOpen(false);
+    if (!pending) return;
+    if (type === "plant") {
+      await createNewPlant(pending.code, pending.gps);
+    } else {
+      setShapePickerOpen(true);
+    }
+  }
+
+  function onCancelTypePicker() {
+    setTypePickerOpen(false);
+    resetScan();
+  }
+
+  function onCancelShapePicker() {
+    setShapePickerOpen(false);
+    // If brush.type is shape, user backed out of binding — drop the scan.
+    // If brush.type is ask, the type picker is already dismissed, so also drop.
+    resetScan();
+  }
+
+  async function onPickShape(shape: LocationShape) {
+    setShapePickerOpen(false);
+    if (!pending) return;
+    await bindCodeToShape(shape, pending.code);
   }
 
   function toggleBrush(on: boolean) {
@@ -275,7 +377,9 @@ export default function ScanScreen() {
 
   const brushSelectedTags = tags.filter((t) => brush.tagIds.includes(t.id));
 
-  const cameraActive = !brushModalOpen;
+  const cameraActive =
+    !brushModalOpen && !typePickerOpen && !shapePickerOpen;
+  const availableShapes = shapes.filter((s) => !s.qrCode);
 
   function toggleTag(id: string) {
     setBrush((b) => {
@@ -297,11 +401,11 @@ export default function ScanScreen() {
           onBarcodeScanned={busy ? undefined : (e) => handleScan(e.data)}
         />
       )}
-      {busy && (
+      {busy && !typePickerOpen && !shapePickerOpen && (
         <View style={styles.busyOverlay} pointerEvents="none">
           <ActivityIndicator size="large" color="#fff" />
           <Text style={styles.busyText}>
-            {brush.enabled ? "Applying brush…" : "Looking up plant…"}
+            {brush.enabled ? "Applying brush…" : "Looking up code…"}
           </Text>
         </View>
       )}
@@ -395,13 +499,45 @@ export default function ScanScreen() {
               <Switch value={brush.enabled} onValueChange={toggleBrush} />
             </View>
             <Text style={styles.brushHint}>
-              When on, every scanned plant gets these properties applied. Toggle
-              off to reset.
+              When on, subsequent scans skip the type prompt. Plant fields below
+              only apply when the type is Plant.
             </Text>
             <ScrollView
               style={styles.brushScroll}
               keyboardShouldPersistTaps="handled"
             >
+              <View style={styles.brushFieldBlock}>
+                <Text style={styles.brushLabel}>Type</Text>
+                <View style={styles.typeChipsRow}>
+                  {(
+                    [
+                      { value: "ask", label: "Ask each time" },
+                      { value: "plant", label: "Plant" },
+                      { value: "shape", label: "Shape" },
+                    ] as const
+                  ).map((opt) => {
+                    const on = brush.type === opt.value;
+                    return (
+                      <Pressable
+                        key={opt.value}
+                        onPress={() =>
+                          setBrush((b) => ({ ...b, type: opt.value }))
+                        }
+                        style={[styles.typeChip, on && styles.typeChipOn]}
+                      >
+                        <Text
+                          style={[
+                            styles.typeChipLabel,
+                            on && styles.typeChipLabelOn,
+                          ]}
+                        >
+                          {opt.label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
               <Pressable
                 style={styles.brushRow}
                 onPress={() => setTagPickerOpen(true)}
@@ -568,6 +704,116 @@ export default function ScanScreen() {
             </Pressable>
           </Pressable>
         )}
+      </Modal>
+
+      <Modal
+        transparent
+        visible={typePickerOpen}
+        animationType="fade"
+        onRequestClose={onCancelTypePicker}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={onCancelTypePicker}>
+          <Pressable style={styles.typePickerSheet} onPress={() => {}}>
+            <Text style={styles.modalTitle}>What is this code for?</Text>
+            {pending && (
+              <Text style={styles.typePickerCode} numberOfLines={1}>
+                {pending.code}
+              </Text>
+            )}
+            <TouchableOpacity
+              style={styles.typePickerRow}
+              onPress={() => onPickType("plant")}
+            >
+              <View style={styles.typePickerIcon}>
+                <Ionicons name="leaf-outline" size={20} color="#16a34a" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.typePickerLabel}>Plant</Text>
+                <Text style={styles.typePickerSub}>
+                  Create a new plant for this code
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color="#a3a3a3" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.typePickerRow}
+              onPress={() => onPickType("shape")}
+            >
+              <View style={styles.typePickerIcon}>
+                <Ionicons name="square-outline" size={20} color="#171717" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.typePickerLabel}>Shape</Text>
+                <Text style={styles.typePickerSub}>
+                  Bind this code to an existing location
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color="#a3a3a3" />
+            </TouchableOpacity>
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                onPress={onCancelTypePicker}
+                style={[styles.modalSave, { backgroundColor: "#e5e5e5" }]}
+              >
+                <Text style={[styles.modalSaveText, { color: "#171717" }]}>
+                  Cancel
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        transparent
+        visible={shapePickerOpen}
+        animationType="fade"
+        onRequestClose={onCancelShapePicker}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={onCancelShapePicker}>
+          <Pressable style={styles.modalSheet} onPress={() => {}}>
+            <Text style={styles.modalTitle}>Pick a shape</Text>
+            {pending && (
+              <Text style={styles.typePickerCode} numberOfLines={1}>
+                {pending.code}
+              </Text>
+            )}
+            {availableShapes.length === 0 ? (
+              <Text style={styles.shapePickerEmpty}>
+                No shapes available. Draw one on the Map first, then scan again.
+              </Text>
+            ) : (
+              <FlatList
+                data={availableShapes}
+                keyExtractor={(s) => s.id}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={styles.shapePickerRow}
+                    onPress={() => onPickShape(item)}
+                  >
+                    <View
+                      style={[styles.shapeSwatch, { backgroundColor: item.color }]}
+                    />
+                    <Text style={styles.shapePickerName} numberOfLines={1}>
+                      {item.name?.trim() || "Unnamed location"}
+                    </Text>
+                    <Ionicons name="chevron-forward" size={18} color="#a3a3a3" />
+                  </TouchableOpacity>
+                )}
+              />
+            )}
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                onPress={onCancelShapePicker}
+                style={[styles.modalSave, { backgroundColor: "#e5e5e5" }]}
+              >
+                <Text style={[styles.modalSaveText, { color: "#171717" }]}>
+                  Cancel
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
       </Modal>
     </View>
   );
@@ -799,6 +1045,77 @@ const styles = StyleSheet.create({
   },
   actionChipLabel: { fontSize: 13, color: "#171717" },
   actionChipLabelOn: { color: "#fff" },
+
+  typeChipsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  typeChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 18,
+    backgroundColor: "#f5f5f5",
+    borderWidth: 1,
+    borderColor: "#e5e5e5",
+  },
+  typeChipOn: {
+    backgroundColor: "#171717",
+    borderColor: "#171717",
+  },
+  typeChipLabel: { fontSize: 13, color: "#171717" },
+  typeChipLabelOn: { color: "#fff" },
+
+  typePickerSheet: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 20,
+  },
+  typePickerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 14,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderColor: "#e5e5e5",
+  },
+  typePickerIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#f5f5f5",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  typePickerLabel: { fontSize: 16, color: "#171717", fontWeight: "500" },
+  typePickerSub: { fontSize: 12, color: "#737373", marginTop: 2 },
+  typePickerCode: {
+    fontSize: 13,
+    color: "#737373",
+    marginTop: 4,
+    marginBottom: 4,
+  },
+
+  shapePickerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderColor: "#f5f5f5",
+  },
+  shapeSwatch: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+  },
+  shapePickerName: { fontSize: 15, color: "#171717", flex: 1 },
+  shapePickerEmpty: {
+    paddingVertical: 16,
+    fontSize: 14,
+    color: "#737373",
+    textAlign: "center",
+  },
 
   brushTagWrap: {
     flexDirection: "row",
