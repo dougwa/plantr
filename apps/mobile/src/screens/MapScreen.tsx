@@ -173,6 +173,86 @@ function ellipsePoints(s: LocationShape, segments = 48): LatLng[] {
   return pts;
 }
 
+function polygonCentroid(
+  points: Array<{ lat: number; lng: number }>,
+): { lat: number; lng: number } {
+  const lat = points.reduce((s, p) => s + p.lat, 0) / points.length;
+  const lng = points.reduce((s, p) => s + p.lng, 0) / points.length;
+  return { lat, lng };
+}
+
+function polygonBoundingBox(
+  points: Array<{ lat: number; lng: number }>,
+): { widthMeters: number; heightMeters: number } {
+  if (points.length === 0) return { widthMeters: 8, heightMeters: 8 };
+  let minLat = points[0]!.lat, maxLat = points[0]!.lat;
+  let minLng = points[0]!.lng, maxLng = points[0]!.lng;
+  for (const p of points) {
+    if (p.lat < minLat) minLat = p.lat;
+    if (p.lat > maxLat) maxLat = p.lat;
+    if (p.lng < minLng) minLng = p.lng;
+    if (p.lng > maxLng) maxLng = p.lng;
+  }
+  const cosLat = Math.cos((((minLat + maxLat) / 2) * Math.PI) / 180);
+  const widthMeters = (maxLng - minLng) * METERS_PER_DEGREE_LAT * cosLat;
+  const heightMeters = (maxLat - minLat) * METERS_PER_DEGREE_LAT;
+  return { widthMeters: Math.max(1, widthMeters), heightMeters: Math.max(1, heightMeters) };
+}
+
+function splitLongestEdge(
+  points: Array<{ lat: number; lng: number }>,
+): Array<{ lat: number; lng: number }> {
+  let maxLen = -1;
+  let maxIdx = 0;
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i]!;
+    const b = points[(i + 1) % points.length]!;
+    const dLat = (a.lat - b.lat) * METERS_PER_DEGREE_LAT;
+    const cosLat = Math.cos((a.lat * Math.PI) / 180);
+    const dLng = (a.lng - b.lng) * METERS_PER_DEGREE_LAT * cosLat;
+    const len = Math.sqrt(dLat * dLat + dLng * dLng);
+    if (len > maxLen) { maxLen = len; maxIdx = i; }
+  }
+  const a = points[maxIdx]!;
+  const b = points[(maxIdx + 1) % points.length]!;
+  const mid = { lat: (a.lat + b.lat) / 2, lng: (a.lng + b.lng) / 2 };
+  return [...points.slice(0, maxIdx + 1), mid, ...points.slice(maxIdx + 1)];
+}
+
+function pointInPolygonLatLng(
+  pts: Array<{ lat: number; lng: number }>,
+  coord: LatLng,
+): boolean {
+  if (pts.length < 3) return false;
+  const x = coord.longitude;
+  const y = coord.latitude;
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const xi = pts[i]!.lng, yi = pts[i]!.lat;
+    const xj = pts[j]!.lng, yj = pts[j]!.lat;
+    if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function defaultPolygonPoints(
+  centerLat: number,
+  centerLng: number,
+): Array<{ lat: number; lng: number }> {
+  const half = 4;
+  const cosLat = Math.cos((centerLat * Math.PI) / 180);
+  const dLat = half / METERS_PER_DEGREE_LAT;
+  const dLng = half / (METERS_PER_DEGREE_LAT * cosLat);
+  return [
+    { lat: centerLat + dLat, lng: centerLng - dLng },
+    { lat: centerLat + dLat, lng: centerLng + dLng },
+    { lat: centerLat - dLat, lng: centerLng + dLng },
+    { lat: centerLat - dLat, lng: centerLng - dLng },
+  ];
+}
+
 function fitRegion(points: LatLng[]): Region | null {
   if (points.length === 0) return null;
   let minLat = points[0]!.latitude;
@@ -340,13 +420,13 @@ export default function MapScreen() {
   }, [loading, plantsWithGps, shapes]);
 
   function chooseShapeKind(): Promise<
-    "rectangle" | "ellipse" | "property" | null
+    "rectangle" | "ellipse" | "property" | "polygon" | null
   > {
     return new Promise((resolve) => {
       if (Platform.OS === "ios") {
         ActionSheetIOS.showActionSheetWithOptions(
           {
-            options: ["Cancel", "Rectangle", "Ellipse", "Property"],
+            options: ["Cancel", "Rectangle", "Ellipse", "Property", "Polygon"],
             cancelButtonIndex: 0,
             title: "Add a location",
           },
@@ -358,7 +438,9 @@ export default function MapScreen() {
                   ? "ellipse"
                   : i === 3
                     ? "property"
-                    : null,
+                    : i === 4
+                      ? "polygon"
+                      : null,
             ),
         );
       } else {
@@ -367,6 +449,7 @@ export default function MapScreen() {
           { text: "Rectangle", onPress: () => resolve("rectangle") },
           { text: "Ellipse", onPress: () => resolve("ellipse") },
           { text: "Property", onPress: () => resolve("property") },
+          { text: "Polygon", onPress: () => resolve("polygon") },
         ]);
       }
     });
@@ -382,6 +465,10 @@ export default function MapScreen() {
     const kind = await chooseShapeKind();
     if (!kind) return;
     const isProperty = kind === "property";
+    const isPolygon = kind === "polygon";
+    const polygonPoints = isPolygon
+      ? defaultPolygonPoints(camera.center.latitude, camera.center.longitude)
+      : undefined;
     const r = await createLocationShape(token, {
       kind,
       color: COLOR_PALETTE[shapes.length % COLOR_PALETTE.length] ?? COLOR_PALETTE[0]!,
@@ -390,6 +477,7 @@ export default function MapScreen() {
       widthMeters: isProperty ? 40 : 8,
       heightMeters: isProperty ? 40 : 8,
       name: null,
+      polygonPoints,
     });
     if (!r.ok) {
       Alert.alert("Failed to create location", r.error);
@@ -426,6 +514,9 @@ export default function MapScreen() {
   }
 
   function pointInShape(s: LocationShape, coord: LatLng): boolean {
+    if (s.kind === "polygon") {
+      return pointInPolygonLatLng(s.polygonPoints ?? [], coord);
+    }
     const local = latLngToLocal(s, coord);
     const halfW = s.widthMeters / 2;
     const halfH = s.heightMeters / 2;
@@ -575,14 +666,24 @@ export default function MapScreen() {
     };
   }, [initialReady]);
 
+  const editingHalfDims = useMemo(() => {
+    if (!editing) return { halfW: 4, halfH: 4 };
+    if (editing.kind === "polygon" && editing.polygonPoints?.length) {
+      const bbox = polygonBoundingBox(editing.polygonPoints);
+      return { halfW: bbox.widthMeters / 2, halfH: bbox.heightMeters / 2 };
+    }
+    return { halfW: editing.widthMeters / 2, halfH: editing.heightMeters / 2 };
+  }, [editing]);
+
   const iconOffsetM = useMemo(() => {
     if (viewportZoom == null) return 6; // safe fallback before the camera is known
     const lat = editing?.centerLat ?? initialCamera?.center.latitude ?? 0;
     const mpp = metersPerPixel(viewportZoom, lat);
     if (!editing) return RADIAL_OFFSET_PX * mpp;
 
+    const { halfW, halfH } = editingHalfDims;
     // Smaller axis governs the worst case for both diagonal constraints.
-    const minHalfPx = Math.min(editing.widthMeters, editing.heightMeters) / 2 / mpp;
+    const minHalfPx = Math.min(halfW * 2, halfH * 2) / 2 / mpp;
 
     const diagActionPx = Math.max(
       0,
@@ -602,8 +703,7 @@ export default function MapScreen() {
   }, [
     viewportZoom,
     editing?.centerLat,
-    editing?.widthMeters,
-    editing?.heightMeters,
+    editingHalfDims,
     initialCamera?.center.latitude,
   ]);
 
@@ -611,6 +711,22 @@ export default function MapScreen() {
 
   function applyMove(coord: LatLng) {
     if (!editing) return;
+    if (editing.kind === "polygon" && editing.polygonPoints) {
+      const dLat = coord.latitude - editing.centerLat;
+      const dLng = coord.longitude - editing.centerLng;
+      const newPoints = editing.polygonPoints.map((p) => ({
+        lat: p.lat + dLat,
+        lng: p.lng + dLng,
+      }));
+      setShapes((cur) =>
+        cur.map((s) =>
+          s.id === editing.id
+            ? { ...s, centerLat: coord.latitude, centerLng: coord.longitude, polygonPoints: newPoints }
+            : s,
+        ),
+      );
+      return;
+    }
     setShapes((cur) =>
       cur.map((s) =>
         s.id === editing.id
@@ -622,10 +738,12 @@ export default function MapScreen() {
 
   async function persistMove() {
     if (!editing || !token) return;
-    const r = await patchLocationShape(token, editing.id, {
+    const patch: Partial<LocationShape> = {
       centerLat: editing.centerLat,
       centerLng: editing.centerLng,
-    });
+    };
+    if (editing.kind === "polygon") patch.polygonPoints = editing.polygonPoints;
+    const r = await patchLocationShape(token, editing.id, patch);
     if (!r.ok) {
       Alert.alert("Move failed", r.error);
       reload();
@@ -697,6 +815,97 @@ export default function MapScreen() {
     });
     if (!r.ok) {
       Alert.alert("Rotate failed", r.error);
+      reload();
+    } else {
+      setShapes((cur) =>
+        cur.map((s) => (s.id === r.data.shape.id ? r.data.shape : s)),
+      );
+    }
+  }
+
+  // --- polygon vertex / point-count handlers ----------------------------------
+
+  function applyPolygonVertex(idx: number, coord: LatLng) {
+    if (!editing || editing.kind !== "polygon" || !editing.polygonPoints) return;
+    const newPoints = editing.polygonPoints.map((p, i) =>
+      i === idx ? { lat: coord.latitude, lng: coord.longitude } : p,
+    );
+    const centroid = polygonCentroid(newPoints);
+    setShapes((cur) =>
+      cur.map((s) =>
+        s.id === editing.id
+          ? { ...s, centerLat: centroid.lat, centerLng: centroid.lng, polygonPoints: newPoints }
+          : s,
+      ),
+    );
+  }
+
+  async function persistPolygonVertex() {
+    if (!editing || !token || editing.kind !== "polygon") return;
+    const r = await patchLocationShape(token, editing.id, {
+      centerLat: editing.centerLat,
+      centerLng: editing.centerLng,
+      polygonPoints: editing.polygonPoints,
+    });
+    if (!r.ok) {
+      Alert.alert("Move failed", r.error);
+      reload();
+    } else {
+      setShapes((cur) =>
+        cur.map((s) => (s.id === r.data.shape.id ? r.data.shape : s)),
+      );
+    }
+  }
+
+  async function addPolygonPoint() {
+    if (!editing || editing.kind !== "polygon" || !editing.polygonPoints || !token) return;
+    const newPoints = splitLongestEdge(editing.polygonPoints);
+    const centroid = polygonCentroid(newPoints);
+    const bbox = polygonBoundingBox(newPoints);
+    setShapes((cur) =>
+      cur.map((s) =>
+        s.id === editing.id
+          ? { ...s, centerLat: centroid.lat, centerLng: centroid.lng, polygonPoints: newPoints, ...bbox }
+          : s,
+      ),
+    );
+    const r = await patchLocationShape(token, editing.id, {
+      centerLat: centroid.lat,
+      centerLng: centroid.lng,
+      polygonPoints: newPoints,
+      ...bbox,
+    });
+    if (!r.ok) {
+      Alert.alert("Failed to add point", r.error);
+      reload();
+    } else {
+      setShapes((cur) =>
+        cur.map((s) => (s.id === r.data.shape.id ? r.data.shape : s)),
+      );
+    }
+  }
+
+  async function removePolygonPoint() {
+    if (!editing || editing.kind !== "polygon" || !editing.polygonPoints || !token) return;
+    if (editing.polygonPoints.length <= 3) return;
+    const newPoints = editing.polygonPoints.slice(0, -1);
+    const centroid = polygonCentroid(newPoints);
+    const bbox = polygonBoundingBox(newPoints);
+    setShapes((cur) =>
+      cur.map((s) =>
+        s.id === editing.id
+          ? { ...s, centerLat: centroid.lat, centerLng: centroid.lng, polygonPoints: newPoints, ...bbox }
+          : s,
+      ),
+    );
+    const r = await patchLocationShape(token, editing.id, {
+      centerLat: centroid.lat,
+      centerLng: centroid.lng,
+      polygonPoints: newPoints,
+      ...bbox,
+    });
+    if (!r.ok) {
+      Alert.alert("Failed to remove point", r.error);
       reload();
     } else {
       setShapes((cur) =>
@@ -787,12 +996,42 @@ export default function MapScreen() {
           .map((s) => (
             <Polygon
               key={s.id}
-              coordinates={s.kind === "ellipse" ? ellipsePoints(s) : rectangleCorners(s)}
+              coordinates={
+                s.kind === "ellipse"
+                  ? ellipsePoints(s)
+                  : s.kind === "polygon"
+                    ? (s.polygonPoints ?? []).map((p) => ({ latitude: p.lat, longitude: p.lng }))
+                    : rectangleCorners(s)
+              }
               strokeColor={s.color}
               fillColor={`${s.color}33`}
               strokeWidth={2}
             />
           ))}
+        {shapes
+          .filter((s) => s.name?.trim())
+          .map((s) => {
+            const labelCoord =
+              s.kind === "polygon" && s.polygonPoints?.length
+                ? (() => { const c = polygonCentroid(s.polygonPoints); return { latitude: c.lat, longitude: c.lng }; })()
+                : { latitude: s.centerLat, longitude: s.centerLng };
+            return (
+            <Marker
+              key={`label-${s.id}-${s.name}`}
+              coordinate={labelCoord}
+              anchor={{ x: 0.5, y: 0.5 }}
+              tracksViewChanges={false}
+              onPress={(e) => handleTap(e.nativeEvent.coordinate)}
+            >
+              <Text
+                style={[styles.watermarkText, { color: s.color }]}
+                numberOfLines={2}
+              >
+                {s.name!.trim()}
+              </Text>
+            </Marker>
+            );
+          })}
         {plantsWithGps.map((p) => (
           <Marker
             key={p.id}
@@ -809,28 +1048,45 @@ export default function MapScreen() {
           </Marker>
         ))}
 
-        {editing && <EditOverlay
-          shape={editing}
-          iconOffsetM={iconOffsetM}
-          zoom={viewportZoom}
-          onMove={(lat, lng) =>
-            applyMove({ latitude: lat, longitude: lng })
-          }
-          onMoveEnd={persistMove}
-          onResize={applyResize}
-          onResizeEnd={persistResize}
-          onRotateDrag={(e) => applyRotate(e.nativeEvent.coordinate)}
-          onRotateEnd={persistRotate}
-          onTapName={() =>
-            setSubModal({
-              kind: "name",
-              shapeId: editing.id,
-              value: editing.name ?? "",
-            })
-          }
-          onTapColor={() => setSubModal({ kind: "color", shapeId: editing.id })}
-          onTapDelete={() => setSubModal({ kind: "delete", shapeId: editing.id })}
-        />}
+        {editing && editing.kind === "polygon"
+          ? <PolygonEditOverlay
+              shape={editing}
+              iconOffsetM={iconOffsetM}
+              halfW={editingHalfDims.halfW}
+              halfH={editingHalfDims.halfH}
+              onVertexDrag={applyPolygonVertex}
+              onVertexDragEnd={persistPolygonVertex}
+              onAddPoint={addPolygonPoint}
+              onRemovePoint={removePolygonPoint}
+              onTapName={() =>
+                setSubModal({ kind: "name", shapeId: editing.id, value: editing.name ?? "" })
+              }
+              onTapColor={() => setSubModal({ kind: "color", shapeId: editing.id })}
+              onTapDelete={() => setSubModal({ kind: "delete", shapeId: editing.id })}
+            />
+          : editing && <EditOverlay
+              shape={editing}
+              iconOffsetM={iconOffsetM}
+              zoom={viewportZoom}
+              onMove={(lat, lng) =>
+                applyMove({ latitude: lat, longitude: lng })
+              }
+              onMoveEnd={persistMove}
+              onResize={applyResize}
+              onResizeEnd={persistResize}
+              onRotateDrag={(e) => applyRotate(e.nativeEvent.coordinate)}
+              onRotateEnd={persistRotate}
+              onTapName={() =>
+                setSubModal({
+                  kind: "name",
+                  shapeId: editing.id,
+                  value: editing.name ?? "",
+                })
+              }
+              onTapColor={() => setSubModal({ kind: "color", shapeId: editing.id })}
+              onTapDelete={() => setSubModal({ kind: "delete", shapeId: editing.id })}
+            />
+        }
       </MapView>
 
       {editing && (
@@ -867,7 +1123,9 @@ export default function MapScreen() {
         <View style={styles.helpPill}>
           <Text style={styles.helpText}>
             {editing
-              ? "Drag inside to move · drag the edge to resize · rotator to rotate · tap map to finish"
+              ? editing.kind === "polygon"
+                ? "Drag vertices to reshape · drag inside to move · +/− to add or remove points · tap map to finish"
+                : "Drag inside to move · drag the edge to resize · rotator to rotate · tap map to finish"
               : "Long-press a location to edit · Double-tap to view its plants"}
           </Text>
         </View>
@@ -1223,6 +1481,130 @@ function ShapeBodyEditor({
 // on iOS (MapKit), so the existing interior move Marker can't satisfy a plain
 // tap-and-drag. This overlay sits above the MapView in RN's view hierarchy
 // and uses a PanResponder to capture pans inside the editing shape, then
+// ---- polygon body: one draggable vertex handle per point -------------------
+
+function PolygonBodyEditor({
+  shape,
+  onVertexDrag,
+  onVertexDragEnd,
+}: {
+  shape: LocationShape;
+  onVertexDrag: (idx: number, coord: LatLng) => void;
+  onVertexDragEnd: () => void;
+}) {
+  const pts = shape.polygonPoints ?? [];
+  return (
+    <>
+      {pts.map((p, idx) => (
+        <Marker
+          key={`vertex-${idx}`}
+          coordinate={{ latitude: p.lat, longitude: p.lng }}
+          anchor={{ x: 0.5, y: 0.5 }}
+          zIndex={3}
+          draggable
+          tracksViewChanges={false}
+          onDrag={(e) => onVertexDrag(idx, e.nativeEvent.coordinate)}
+          onDragEnd={onVertexDragEnd}
+        >
+          <View style={styles.handleHit}>
+            <View style={styles.handleCorner} />
+          </View>
+        </Marker>
+      ))}
+    </>
+  );
+}
+
+// ---- polygon edit overlay: vertex handles + action chips (no rotation) -----
+
+function PolygonEditOverlay({
+  shape,
+  iconOffsetM,
+  halfW,
+  halfH,
+  onVertexDrag,
+  onVertexDragEnd,
+  onAddPoint,
+  onRemovePoint,
+  onTapName,
+  onTapColor,
+  onTapDelete,
+}: {
+  shape: LocationShape;
+  iconOffsetM: number;
+  halfW: number;
+  halfH: number;
+  onVertexDrag: (idx: number, coord: LatLng) => void;
+  onVertexDragEnd: () => void;
+  onAddPoint: () => void;
+  onRemovePoint: () => void;
+  onTapName: () => void;
+  onTapColor: () => void;
+  onTapDelete: () => void;
+}) {
+  const nameAt = localToLatLng(shape, halfW + iconOffsetM, 0);
+  const colorAt = localToLatLng(shape, -halfW - iconOffsetM, 0);
+  const deleteAt = localToLatLng(shape, 0, -halfH - iconOffsetM);
+  const addAt = localToLatLng(shape, iconOffsetM * 1.5, halfH + iconOffsetM);
+  const removeAt = localToLatLng(shape, -iconOffsetM * 1.5, halfH + iconOffsetM);
+  const canRemove = (shape.polygonPoints?.length ?? 0) > 3;
+
+  return (
+    <>
+      <PolygonBodyEditor
+        shape={shape}
+        onVertexDrag={onVertexDrag}
+        onVertexDragEnd={onVertexDragEnd}
+      />
+
+      <Marker coordinate={addAt} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false} onPress={onAddPoint}>
+        <View style={styles.hitLarge}>
+          <View style={styles.actionChip}>
+            <Ionicons name="add" size={20} color="#171717" />
+          </View>
+        </View>
+      </Marker>
+
+      <Marker coordinate={removeAt} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false} onPress={canRemove ? onRemovePoint : undefined}>
+        <View style={styles.hitLarge}>
+          <View style={[styles.actionChip, !canRemove && styles.actionChipDisabled]}>
+            <Ionicons name="remove" size={20} color={canRemove ? "#171717" : "#a3a3a3"} />
+          </View>
+        </View>
+      </Marker>
+
+      <Marker coordinate={nameAt} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false} onPress={onTapName}>
+        <View style={styles.hitLarge}>
+          <View style={styles.actionChip}>
+            <Ionicons name="text-outline" size={18} color="#171717" />
+          </View>
+        </View>
+      </Marker>
+
+      <Marker coordinate={colorAt} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false} onPress={onTapColor}>
+        <View style={styles.hitLarge}>
+          <View style={[styles.actionChip, { backgroundColor: shape.color }]}>
+            <Ionicons name="color-palette-outline" size={18} color="#fff" />
+          </View>
+        </View>
+      </Marker>
+
+      <Marker coordinate={deleteAt} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false} onPress={onTapDelete}>
+        <View style={styles.hitLarge}>
+          <View style={[styles.actionChip, styles.actionChipDanger]}>
+            <Ionicons name="trash-outline" size={18} color="#fff" />
+          </View>
+        </View>
+      </Marker>
+    </>
+  );
+}
+
+// ---- screen-space tap-and-drag move overlay --------------------------------
+// react-native-maps' Marker.draggable requires a long-press to begin dragging
+// on iOS (MapKit), so the existing interior move Marker can't satisfy a plain
+// tap-and-drag. This overlay sits above the MapView in RN's view hierarchy
+// and uses a PanResponder to capture pans inside the editing shape, then
 // projects touch points to map coords via mapRef.coordinateForPoint. The
 // catcher is shrunk by EDGE_THRESHOLD_PX so the resize-handle Markers at the
 // shape boundary still receive their touches.
@@ -1258,14 +1640,19 @@ function MoveOverlay({
     (async () => {
       if (!mapRef.current) return;
       try {
-        const halfW = shape.widthMeters / 2;
-        const halfH = shape.heightMeters / 2;
-        const corners = [
-          localToLatLng(shape, -halfW, -halfH),
-          localToLatLng(shape, halfW, -halfH),
-          localToLatLng(shape, halfW, halfH),
-          localToLatLng(shape, -halfW, halfH),
-        ];
+        const corners: LatLng[] =
+          shape.kind === "polygon" && shape.polygonPoints?.length
+            ? shape.polygonPoints.map((p) => ({ latitude: p.lat, longitude: p.lng }))
+            : (() => {
+                const halfW = shape.widthMeters / 2;
+                const halfH = shape.heightMeters / 2;
+                return [
+                  localToLatLng(shape, -halfW, -halfH),
+                  localToLatLng(shape, halfW, -halfH),
+                  localToLatLng(shape, halfW, halfH),
+                  localToLatLng(shape, -halfW, halfH),
+                ];
+              })();
         const pts = await Promise.all(
           corners.map((c) => mapRef.current!.pointForCoordinate(c)),
         );
@@ -1640,6 +2027,7 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   actionChipDanger: { backgroundColor: "#dc2626", borderColor: "#dc2626" },
+  actionChipDisabled: { opacity: 0.4 },
 
   fabSafe: { position: "absolute", right: 16, bottom: 16, gap: 12, alignItems: "flex-end" },
   fab: {
@@ -1760,4 +2148,14 @@ const styles = StyleSheet.create({
   pickerText: { flex: 1 },
   pickerName: { fontSize: 15, color: "#171717", fontWeight: "500" },
   pickerType: { fontSize: 12, color: "#737373", marginTop: 2 },
+  watermarkText: {
+    fontSize: 11,
+    fontWeight: "600",
+    textAlign: "center",
+    opacity: 0.8,
+    textShadowColor: "rgba(0,0,0,0.85)",
+    textShadowOffset: { width: 0, height: 0 },
+    textShadowRadius: 3,
+    maxWidth: 120,
+  },
 });

@@ -287,7 +287,7 @@ export async function listPlants(token: string) {
 export type LocationShape = {
   id: string;
   name: string | null;
-  kind: "rectangle" | "ellipse" | "property";
+  kind: "rectangle" | "ellipse" | "property" | "polygon";
   color: string;
   centerLat: number;
   centerLng: number;
@@ -297,6 +297,7 @@ export type LocationShape = {
   locked: boolean;
   createdAt: string;
   updatedAt: string;
+  polygonPoints?: Array<{ lat: number; lng: number }>;
 };
 
 export async function listLocationShapes(token: string) {
@@ -310,12 +311,13 @@ export async function createLocationShape(
   token: string,
   body: {
     name?: string | null;
-    kind: "rectangle" | "ellipse" | "property";
+    kind: "rectangle" | "ellipse" | "property" | "polygon";
     color: string;
     centerLat: number;
     centerLng: number;
     widthMeters: number;
     heightMeters: number;
+    polygonPoints?: Array<{ lat: number; lng: number }>;
   },
 ) {
   return request<{ shape: LocationShape }>("/location-shapes", {
