@@ -3,6 +3,7 @@ import {
   ActionSheetIOS,
   ActivityIndicator,
   Alert,
+  Dimensions,
   Modal,
   PanResponder,
   Platform,
@@ -19,7 +20,6 @@ import MapView, {
   type MapPressEvent,
   Marker,
   Polygon,
-  Polyline,
   PROVIDER_DEFAULT,
   type Camera,
   type LatLng,
@@ -84,6 +84,16 @@ function metersPerPixel(zoom: number, lat: number): number {
     (EARTH_CIRCUMFERENCE_M * Math.cos((lat * Math.PI) / 180)) /
     (TILE_SIZE_PX * Math.pow(2, zoom))
   );
+}
+
+// Apple Maps' getCamera() returns zoom=null on iOS, so we derive zoom from
+// the visible region's longitudeDelta. Web Mercator: at zoom z the world
+// spans 256·2^z pixels, so a viewport showing L° of longitude in W px gives
+// zoom = log2(360·W / (L·256)). Latitude doesn't enter — longitudeDelta is
+// already expressed in degrees.
+function zoomFromLongitudeDelta(longitudeDelta: number): number {
+  const screenWidth = Dimensions.get("window").width;
+  return Math.log2((360 * screenWidth) / (longitudeDelta * TILE_SIZE_PX));
 }
 
 const COLOR_PALETTE = [
@@ -524,33 +534,41 @@ export default function MapScreen() {
     }
   }
 
-  async function persistViewport() {
+  async function persistViewport(region: Region) {
     if (!mapRef.current) return;
     const cam = await mapRef.current.getCamera();
     if (!cam?.center) return;
     hasSavedViewRef.current = true;
-    if (cam.zoom != null) setViewportZoom(cam.zoom);
+    const zoom = cam.zoom ?? zoomFromLongitudeDelta(region.longitudeDelta);
+    setViewportZoom(zoom);
     setViewportRev((n) => n + 1);
     saveViewport({
       center: cam.center,
       pitch: cam.pitch ?? 0,
       heading: cam.heading ?? 0,
-      zoom: cam.zoom,
+      zoom,
       altitude: cam.altitude,
     });
   }
 
-  // Pull the initial zoom from whatever camera the map ends up rendering
-  // with, so EditOverlay can size the action-icon offsets correctly even
-  // before the user has moved the map.
+  // Pull the initial zoom so EditOverlay can size the action-icon offsets
+  // before the user has moved the map. Apple Maps' getCamera() returns
+  // zoom=null, so we read the visible region via getMapBoundaries() and
+  // derive zoom from longitudeDelta.
   useEffect(() => {
     if (!initialReady) return;
     let cancelled = false;
     (async () => {
-      // Small delay so MapKit/Google Maps has installed the camera.
-      await new Promise((r) => setTimeout(r, 50));
-      const cam = await mapRef.current?.getCamera();
-      if (!cancelled && cam?.zoom != null) setViewportZoom(cam.zoom);
+      while (!mapRef.current) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      const bounds = await mapRef.current!.getMapBoundaries();
+      if (cancelled || !bounds) return;
+      const longitudeDelta =
+        bounds.northEast.longitude - bounds.southWest.longitude;
+      if (longitudeDelta > 0) {
+        setViewportZoom(zoomFromLongitudeDelta(longitudeDelta));
+      }
     })();
     return () => {
       cancelled = true;
@@ -931,11 +949,8 @@ function EditOverlay({
   const deleteAt = localToLatLng(shape, 0, -halfH - iconOffsetM);
 
   const center: LatLng = { latitude: shape.centerLat, longitude: shape.centerLng };
-
   return (
     <>
-      <ShapeBoundary shape={shape} />
-
       <ShapeBodyEditor
         shape={shape}
         zoom={zoom}
@@ -1115,7 +1130,6 @@ function ShapeBodyEditor({
   const mpp = metersPerPixel(zoom, shape.centerLat);
   const widthPx = Math.max(1, shape.widthMeters / mpp);
   const heightPx = Math.max(1, shape.heightMeters / mpp);
-  const edgeBand = Math.max(MIN_HANDLE_PX, EDGE_THRESHOLD_PX);
 
   const halfW = shape.widthMeters / 2;
   const halfH = shape.heightMeters / 2;
@@ -1124,100 +1138,82 @@ function ShapeBodyEditor({
     <>
       {HANDLES.map(({ sx, sy }) => {
         const coord = localToLatLng(shape, sx * halfW, sy * halfH);
-        // Hit areas are centered on the visible edge or corner (anchor 0.5/0.5)
-        // so a tap on the white outline lands on the handle. They overlap
-        // by design; corners win the corner square via zIndex.
-        let w: number;
-        let h: number;
-        let zIndex: number;
-        if (sx === 0 && sy === 0) {
-          w = Math.max(MIN_HANDLE_PX, widthPx);
-          h = Math.max(MIN_HANDLE_PX, heightPx);
-          zIndex = 1;
-        } else if (sx !== 0 && sy === 0) {
-          w = edgeBand;
-          h = Math.max(MIN_HANDLE_PX, heightPx);
-          zIndex = 2;
-        } else if (sx === 0 && sy !== 0) {
-          w = Math.max(MIN_HANDLE_PX, widthPx);
-          h = edgeBand;
-          zIndex = 2;
-        } else {
-          w = edgeBand;
-          h = edgeBand;
-          zIndex = 3;
+        const isMove = sx === 0 && sy === 0;
+        const isCorner = sx !== 0 && sy !== 0;
+        const isVerticalEdge = sx !== 0 && sy === 0;
+
+        // The shape's rotationDegrees is CCW (math convention). RN's CSS
+        // rotate is CW-positive, so we negate. We rotate the View directly
+        // because react-native-maps' Marker `rotation` prop doesn't reach
+        // custom child views on iOS MapKit.
+        const rotate = `${-shape.rotationDegrees}deg`;
+
+        if (isMove) {
+          // Move handle covers the whole shape with a transparent hit area.
+          // tracksViewChanges defaults to true so the hit area resizes with
+          // zoom and re-snapshots when rotation changes.
+          return (
+            <Marker
+              key="handle-move"
+              coordinate={coord}
+              anchor={{ x: 0.5, y: 0.5 }}
+              zIndex={1}
+              draggable
+              onDragStart={handleDragStart}
+              onDrag={(e) => handleDrag(0, 0, e.nativeEvent.coordinate)}
+              onDragEnd={() => handleDragEnd(0, 0)}
+            >
+              <View
+                style={{
+                  width: Math.max(MIN_HANDLE_PX, widthPx),
+                  height: Math.max(MIN_HANDLE_PX, heightPx),
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: "transparent",
+                  transform: [{ rotate }],
+                }}
+              >
+                <View style={styles.handleDot} />
+              </View>
+            </Marker>
+          );
         }
+
+        // Resize handles: fixed-size opaque rectangles wrapped in a transparent
+        // hit-area View. The wrapper-around-visual structure matches the
+        // working action-chip markers; a bare single-View child can render as
+        // an empty snapshot on iOS MapKit.
+        //
+        // tracksViewChanges={false} means iOS captures the view as a marker
+        // image once and never updates it. To pick up rotation changes (from
+        // the rotate handle drag), include the rotation in the React key —
+        // changing it remounts the Marker and forces a fresh snapshot.
+        // Quantized to 5° so a smooth rotate drag doesn't churn 8 markers per
+        // frame.
+        const visualStyle = isCorner
+          ? styles.handleCorner
+          : isVerticalEdge
+            ? styles.handleEdgeVertical
+            : styles.handleEdgeHorizontal;
+        const rotKey = Math.round(shape.rotationDegrees / 5) * 5;
         return (
           <Marker
-            key={`handle-${sx}-${sy}`}
+            key={`handle-${sx}-${sy}-${rotKey}`}
             coordinate={coord}
             anchor={{ x: 0.5, y: 0.5 }}
-            zIndex={zIndex}
+            zIndex={isCorner ? 3 : 2}
             draggable
+            tracksViewChanges={false}
             onDragStart={handleDragStart}
             onDrag={(e) => handleDrag(sx, sy, e.nativeEvent.coordinate)}
             onDragEnd={() => handleDragEnd(sx, sy)}
           >
-            <View
-              style={{
-                width: w,
-                height: h,
-                alignItems: "center",
-                justifyContent: "center",
-                backgroundColor: "transparent",
-              }}
-            >
-              {/* Tiny visible dot — keeps native hit-testing alive on iOS
-                  even though the rest of the box is transparent. */}
-              <View style={styles.handleDot} />
+            <View style={styles.handleHit}>
+              <View style={[visualStyle, { transform: [{ rotate }] }]} />
             </View>
           </Marker>
         );
       })}
-    </>
-  );
-}
-
-// White outline along the shape's bounding box, rendered as four polylines
-// with corner gaps. The gaps tell the user "this region resizes both axes."
-function ShapeBoundary({ shape }: { shape: LocationShape }) {
-  const halfW = shape.widthMeters / 2;
-  const halfH = shape.heightMeters / 2;
-  const gap = Math.min(halfW, halfH) * 0.18;
-
-  const edges: [LatLng, LatLng][] = [
-    // North
-    [
-      localToLatLng(shape, -halfW + gap, halfH),
-      localToLatLng(shape, halfW - gap, halfH),
-    ],
-    // South
-    [
-      localToLatLng(shape, -halfW + gap, -halfH),
-      localToLatLng(shape, halfW - gap, -halfH),
-    ],
-    // East
-    [
-      localToLatLng(shape, halfW, halfH - gap),
-      localToLatLng(shape, halfW, -halfH + gap),
-    ],
-    // West
-    [
-      localToLatLng(shape, -halfW, halfH - gap),
-      localToLatLng(shape, -halfW, -halfH + gap),
-    ],
-  ];
-
-  return (
-    <>
-      {edges.map(([a, b], i) => (
-        <Polyline
-          key={`bnd-${i}`}
-          coordinates={[a, b]}
-          strokeColor="#fff"
-          strokeWidth={4}
-        />
-      ))}
     </>
   );
 }
@@ -1596,6 +1592,37 @@ const styles = StyleSheet.create({
     height: 6,
     borderRadius: 3,
     backgroundColor: "rgba(255,255,255,0.55)",
+  },
+  handleHit: {
+    width: 60,
+    height: 60,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "transparent",
+  },
+  handleEdgeVertical: {
+    width: 16,
+    height: 56,
+    borderRadius: 8,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#171717",
+  },
+  handleEdgeHorizontal: {
+    width: 56,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#171717",
+  },
+  handleCorner: {
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "#171717",
   },
   actionChip: {
     width: 34,
