@@ -8,17 +8,61 @@ function toMetersOffset(lat: number, lng: number, centerLat: number, centerLng: 
   return { dx, dy };
 }
 
+function pointInPolygon(
+  lat: number,
+  lng: number,
+  pts: Array<{ lat: number; lng: number }>,
+): boolean {
+  if (pts.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const xi = pts[i]!.lng;
+    const yi = pts[i]!.lat;
+    const xj = pts[j]!.lng;
+    const yj = pts[j]!.lat;
+    if ((yi > lat) !== (yj > lat) && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function isPolygonPointArray(v: unknown): v is Array<{ lat: number; lng: number }> {
+  return (
+    Array.isArray(v) &&
+    v.every(
+      (p) =>
+        typeof p === "object" &&
+        p !== null &&
+        typeof (p as { lat?: unknown }).lat === "number" &&
+        typeof (p as { lng?: unknown }).lng === "number",
+    )
+  );
+}
+
 export function pointInShape(
   lat: number,
   lng: number,
   shape: Pick<
     LocationShape,
-    "kind" | "centerLat" | "centerLng" | "widthMeters" | "heightMeters" | "rotationDegrees"
+    | "kind"
+    | "centerLat"
+    | "centerLng"
+    | "widthMeters"
+    | "heightMeters"
+    | "rotationDegrees"
+    | "polygonPoints"
   >,
 ): boolean {
   // Property shapes are property-line markers, not plant location groups —
   // they never claim plants for assignment.
   if (shape.kind === "property") return false;
+
+  if (shape.kind === "polygon") {
+    return isPolygonPointArray(shape.polygonPoints)
+      ? pointInPolygon(lat, lng, shape.polygonPoints)
+      : false;
+  }
 
   let { dx, dy } = toMetersOffset(lat, lng, shape.centerLat, shape.centerLng);
 

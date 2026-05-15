@@ -1,11 +1,17 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { pointInShape } from "../lib/geo.js";
 
+const polygonPointSchema = z.object({
+  lat: z.number().min(-90).max(90),
+  lng: z.number().min(-180).max(180),
+});
+
 const createSchema = z.object({
   name: z.string().max(64).nullable().optional(),
-  kind: z.enum(["rectangle", "ellipse", "property"]),
+  kind: z.enum(["rectangle", "ellipse", "property", "polygon"]),
   color: z
     .string()
     .regex(/^#[0-9a-fA-F]{6}$/, "color must be #rrggbb"),
@@ -15,6 +21,7 @@ const createSchema = z.object({
   heightMeters: z.number().positive().max(10_000),
   rotationDegrees: z.number().min(-360).max(360).optional(),
   locked: z.boolean().optional(),
+  polygonPoints: z.array(polygonPointSchema).min(3).max(256).optional(),
 });
 
 const patchSchema = createSchema.partial();
@@ -30,6 +37,7 @@ function toPublic(s: {
   heightMeters: number;
   rotationDegrees: number;
   locked: boolean;
+  polygonPoints: Prisma.JsonValue | null;
   createdAt: Date;
   updatedAt: Date;
 }) {
@@ -44,6 +52,7 @@ function toPublic(s: {
     heightMeters: s.heightMeters,
     rotationDegrees: s.rotationDegrees,
     locked: s.locked,
+    polygonPoints: s.polygonPoints ?? undefined,
     createdAt: s.createdAt,
     updatedAt: s.updatedAt,
   };
@@ -98,6 +107,7 @@ export const locationShapeRoutes: FastifyPluginAsync = async (app) => {
         heightMeters: data.heightMeters,
         rotationDegrees: data.rotationDegrees ?? 0,
         locked: data.locked ?? false,
+        polygonPoints: data.polygonPoints ?? undefined,
         createdById: req.user!.id,
       },
     });

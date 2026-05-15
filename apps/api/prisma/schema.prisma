@@ -113,6 +113,7 @@ model LocationShape {
   heightMeters    Float
   rotationDegrees Float    @default(0)
   locked          Boolean  @default(false)
+  polygonPoints   Json?
   createdById     String
   createdBy       User     @relation(fields: [createdById], references: [id])
   createdAt       DateTime @default(now())
