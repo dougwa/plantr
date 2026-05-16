@@ -1,4 +1,4 @@
-import type { Action, ActionKind, Photo, Plant, Tag, User } from "@prisma/client";
+import type { Action, ActionKind, Photo, Plant, Tag, TagKind, User } from "@prisma/client";
 
 export type PublicPhoto = {
   id: string;
@@ -20,7 +20,12 @@ export type PublicAction = {
   createdBy: { id: string; username: string };
 };
 
-export type PublicTag = { id: string; name: string; color: string };
+export type PublicTag = {
+  id: string;
+  name: string;
+  kind: TagKind;
+  locationShapeId: string | null;
+};
 
 export type PublicPlant = {
   id: string;
@@ -33,7 +38,6 @@ export type PublicPlant = {
   gpsLat: number | null;
   gpsLng: number | null;
   plantNetData: unknown;
-  locationShapeId: string | null;
   coverPhoto: PublicPhoto | null;
   photos: PublicPhoto[];
   actions: PublicAction[];
@@ -54,7 +58,12 @@ type PlantWithRelations = Plant & {
 };
 
 export function publicTag(t: Tag): PublicTag {
-  return { id: t.id, name: t.name, color: t.color };
+  return {
+    id: t.id,
+    name: t.name,
+    kind: t.kind,
+    locationShapeId: t.locationShapeId,
+  };
 }
 
 export function publicPhoto(photo: PhotoWithCreator): PublicPhoto {
@@ -93,7 +102,6 @@ export function publicPlant(plant: PlantWithRelations): PublicPlant {
     gpsLat: plant.gpsLat,
     gpsLng: plant.gpsLng,
     plantNetData: plant.plantNetData,
-    locationShapeId: plant.locationShapeId,
     coverPhoto: plant.coverPhoto ? publicPhoto(plant.coverPhoto) : null,
     photos: plant.photos.map(publicPhoto),
     actions: plant.actions.map(publicAction),
@@ -104,7 +112,7 @@ export function publicPlant(plant: PlantWithRelations): PublicPlant {
 }
 
 export const PLANT_INCLUDE = {
-  tags: { orderBy: { name: "asc" as const } },
+  tags: { orderBy: [{ kind: "asc" as const }, { name: "asc" as const }] },
   coverPhoto: { include: { createdBy: { select: { id: true, username: true } } } },
   photos: {
     orderBy: { createdAt: "asc" as const },

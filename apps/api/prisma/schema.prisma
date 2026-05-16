@@ -14,6 +14,11 @@ enum ActionKind {
   treating
 }
 
+enum TagKind {
+  custom
+  location
+}
+
 model User {
   id             String          @id @default(cuid())
   username       String          @unique
@@ -40,37 +45,41 @@ model Session {
   @@index([userId])
 }
 
+// Tag is the unified label model. `kind` partitions tags into UX-distinct
+// buckets (custom for free-form labels, location for shape-paired labels).
+// Location-kind tags are managed by LocationShape and cannot be edited directly.
 model Tag {
-  id        String   @id @default(cuid())
-  name      String   @unique
-  color     String
-  createdAt DateTime @default(now())
-  plants    Plant[]
+  id              String         @id @default(cuid())
+  name            String
+  kind            TagKind        @default(custom)
+  locationShapeId String?        @unique
+  locationShape   LocationShape? @relation(fields: [locationShapeId], references: [id], onDelete: Cascade)
+  createdAt       DateTime       @default(now())
+  plants          Plant[]
+
+  @@unique([kind, name])
 }
 
 model Plant {
-  id              String         @id @default(cuid())
-  qrCode          String         @unique
-  name            String?
-  species         String?
-  description     String?
-  notes           String?
-  coverPhotoId    String?        @unique
-  coverPhoto      Photo?         @relation("PlantCover", fields: [coverPhotoId], references: [id], onDelete: SetNull)
-  gpsLat          Float?
-  gpsLng          Float?
-  plantNetData    Json?
-  locationShapeId String?
-  locationShape   LocationShape? @relation(fields: [locationShapeId], references: [id], onDelete: SetNull)
-  createdById     String
-  createdBy       User           @relation(fields: [createdById], references: [id])
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
-  photos          Photo[]        @relation("PlantPhotos")
-  actions         Action[]
-  tags            Tag[]
-
-  @@index([locationShapeId])
+  id           String   @id @default(cuid())
+  qrCode       String   @unique
+  name         String?
+  species      String?
+  description  String?
+  notes        String?
+  coverPhotoId String?  @unique
+  coverPhoto   Photo?   @relation("PlantCover", fields: [coverPhotoId], references: [id], onDelete: SetNull)
+  gpsLat       Float?
+  gpsLng       Float?
+  plantNetData Json?
+  createdById  String
+  createdBy    User     @relation(fields: [createdById], references: [id])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  photos       Photo[]  @relation("PlantPhotos")
+  actions      Action[]
+  // Plant-to-location relationship lives in `tags` via location-kind Tags.
+  tags         Tag[]
 }
 
 model Photo {
@@ -104,6 +113,7 @@ model Action {
 
 model LocationShape {
   id              String   @id @default(cuid())
+  qrCode          String?  @unique
   name            String?
   kind            String
   color           String
@@ -118,5 +128,7 @@ model LocationShape {
   createdBy       User     @relation(fields: [createdById], references: [id])
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
-  plants          Plant[]
+  // Paired Tag (kind=location) is auto-managed by the API. Plants land here
+  // via Plant.tags.
+  tag             Tag?
 }

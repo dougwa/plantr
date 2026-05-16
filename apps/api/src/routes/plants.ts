@@ -1,13 +1,13 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { prisma } from "../db.js";
-import { pointInShape } from "../lib/geo.js";
 import { deletePhotoFiles } from "../lib/photos.js";
-import { PLANT_INCLUDE, publicPlant } from "../lib/serializers.js";
-
-// Accept any code that's letters, digits, or common ID separators. Avoids
-// "/" so by-qr URL routing stays unambiguous.
-const qrCodeSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9._-]+$/);
+import { PLANT_INCLUDE, publicPlant, publicTag } from "../lib/serializers.js";
+import { qrCodeSchema } from "../lib/qr-code.js";
+import {
+  resolveLocationTagIdsForPoint,
+  syncPlantLocationTags,
+} from "../lib/location-tags.js";
 
 const createSchema = z.object({
   qrCode: qrCodeSchema,
@@ -23,22 +23,14 @@ const patchSchema = z.object({
   notes: z.string().max(4000).nullable().optional(),
   gpsLat: z.number().min(-90).max(90).nullable().optional(),
   gpsLng: z.number().min(-180).max(180).nullable().optional(),
-  locationShapeId: z.string().nullable().optional(),
 });
-
-async function resolveShapeForPoint(lat: number | null, lng: number | null) {
-  if (lat == null || lng == null) return null;
-  const shapes = await prisma.locationShape.findMany();
-  const containing = shapes.find((s) => pointInShape(lat, lng, s));
-  return containing?.id ?? null;
-}
 
 export const plantRoutes: FastifyPluginAsync = async (app) => {
   app.get("/plants", { onRequest: [app.requireAuth] }, async () => {
     const plants = await prisma.plant.findMany({
       orderBy: { createdAt: "asc" },
       include: {
-        tags: { orderBy: { name: "asc" } },
+        tags: { orderBy: [{ kind: "asc" }, { name: "asc" }] },
         coverPhoto: { select: { id: true } },
       },
     });
@@ -47,11 +39,10 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
         id: p.id,
         qrCode: p.qrCode,
         name: p.name,
-        tags: p.tags.map((t) => ({ id: t.id, name: t.name, color: t.color })),
+        tags: p.tags.map(publicTag),
         species: p.species,
         gpsLat: p.gpsLat,
         gpsLng: p.gpsLng,
-        locationShapeId: p.locationShapeId,
         coverPhotoThumbUrl: p.coverPhoto
           ? `/photos/${p.coverPhoto.id}/file/thumb`
           : null,
@@ -83,16 +74,26 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
 
     const existing = await prisma.plant.findUnique({ where: { qrCode } });
     if (existing) return reply.code(409).send({ error: "qr_code_taken" });
+    const shapeUsing = await prisma.locationShape.findUnique({
+      where: { qrCode },
+      select: { id: true },
+    });
+    if (shapeUsing) return reply.code(409).send({ error: "qr_code_taken" });
 
-    const locationShapeId = await resolveShapeForPoint(gpsLat ?? null, gpsLng ?? null);
+    const locationTagIds = await resolveLocationTagIdsForPoint(
+      gpsLat ?? null,
+      gpsLng ?? null,
+    );
 
     const plant = await prisma.plant.create({
       data: {
         qrCode,
         gpsLat: gpsLat ?? null,
         gpsLng: gpsLng ?? null,
-        locationShapeId,
         createdById: req.user!.id,
+        tags: locationTagIds.length
+          ? { connect: locationTagIds.map((id) => ({ id })) }
+          : undefined,
       },
       include: PLANT_INCLUDE,
     });
@@ -139,24 +140,6 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
         data.tags = { set: tagIds.map((id) => ({ id })) };
       }
 
-      // If GPS changed (and locationShapeId not explicitly set), re-resolve the shape.
-      if (
-        (data.gpsLat !== undefined || data.gpsLng !== undefined) &&
-        data.locationShapeId === undefined
-      ) {
-        const current = await prisma.plant.findUnique({
-          where: { id: req.params.id },
-          select: { gpsLat: true, gpsLng: true },
-        });
-        if (current) {
-          const lat =
-            data.gpsLat !== undefined ? (data.gpsLat as number | null) : current.gpsLat;
-          const lng =
-            data.gpsLng !== undefined ? (data.gpsLng as number | null) : current.gpsLng;
-          data.locationShapeId = await resolveShapeForPoint(lat, lng);
-        }
-      }
-
       const updated = await prisma.plant
         .update({
           where: { id: req.params.id },
@@ -168,6 +151,21 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
           throw err;
         });
       if (!updated) return reply.code(404).send({ error: "not_found" });
+
+      // If GPS changed (and tagIds wasn't explicitly set in this same request),
+      // resync the plant's location-kind tags from the new GPS. tagIds set
+      // explicitly wins — user choice overrides auto-resolution for this call.
+      if (
+        tagIds === undefined &&
+        (parsed.data.gpsLat !== undefined || parsed.data.gpsLng !== undefined)
+      ) {
+        await syncPlantLocationTags(updated.id, updated.gpsLat, updated.gpsLng);
+        const refreshed = await prisma.plant.findUnique({
+          where: { id: updated.id },
+          include: PLANT_INCLUDE,
+        });
+        if (refreshed) return { plant: publicPlant(refreshed) };
+      }
       return { plant: publicPlant(updated) };
     },
   );
@@ -175,7 +173,7 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
   // Reset clears every editable field on a plant (and its photos/actions)
   // so the QR code can be reused for a different physical plant. The plant
   // row and its qrCode stay; cover photo, photos, actions, name, type,
-  // species, description, notes, GPS, location, and plantNetData are wiped.
+  // species, description, notes, GPS, tags, and plantNetData are wiped.
   app.post<{ Params: { id: string } }>(
     "/plants/:id/reset",
     { onRequest: [app.requireAuth] },
@@ -215,7 +213,6 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
           gpsLat: null,
           gpsLng: null,
           plantNetData: undefined,
-          locationShapeId: null,
         },
         include: PLANT_INCLUDE,
       });

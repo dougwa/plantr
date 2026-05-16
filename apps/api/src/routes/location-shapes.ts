@@ -2,7 +2,12 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
-import { pointInShape } from "../lib/geo.js";
+import { qrCodeSchema } from "../lib/qr-code.js";
+import {
+  createLocationTagForShape,
+  reassignPlantsAfterShapeChange,
+  syncLocationTagName,
+} from "../lib/location-tags.js";
 
 const polygonPointSchema = z.object({
   lat: z.number().min(-90).max(90),
@@ -24,10 +29,16 @@ const createSchema = z.object({
   polygonPoints: z.array(polygonPointSchema).min(3).max(256).optional(),
 });
 
-const patchSchema = createSchema.partial();
+// qrCode is settable via PATCH but never updatable once set. Not allowed at
+// create time — shapes are drawn on the map first, then later bound to a code
+// by scanning.
+const patchSchema = createSchema.partial().extend({
+  qrCode: qrCodeSchema.optional(),
+});
 
-function toPublic(s: {
+export function toPublicShape(s: {
   id: string;
+  qrCode: string | null;
   name: string | null;
   kind: string;
   color: string;
@@ -43,6 +54,7 @@ function toPublic(s: {
 }) {
   return {
     id: s.id,
+    qrCode: s.qrCode,
     name: s.name,
     kind: s.kind,
     color: s.color,
@@ -58,36 +70,10 @@ function toPublic(s: {
   };
 }
 
-async function reassignPlantsForShape(shapeId: string) {
-  // Re-evaluate every plant that has GPS and either belongs to this shape or
-  // doesn't yet belong to any shape, in case the change pulled them in/out.
-  const candidates = await prisma.plant.findMany({
-    where: {
-      gpsLat: { not: null },
-      gpsLng: { not: null },
-      OR: [{ locationShapeId: null }, { locationShapeId: shapeId }],
-    },
-    select: { id: true, gpsLat: true, gpsLng: true },
-  });
-  if (candidates.length === 0) return;
-
-  const shapes = await prisma.locationShape.findMany();
-  await Promise.all(
-    candidates.map(async (p) => {
-      const containing = shapes.find((s) => pointInShape(p.gpsLat!, p.gpsLng!, s));
-      const next = containing ? containing.id : null;
-      await prisma.plant.update({
-        where: { id: p.id },
-        data: { locationShapeId: next },
-      });
-    }),
-  );
-}
-
 export const locationShapeRoutes: FastifyPluginAsync = async (app) => {
   app.get("/location-shapes", { onRequest: [app.requireAuth] }, async () => {
     const shapes = await prisma.locationShape.findMany({ orderBy: { createdAt: "asc" } });
-    return { shapes: shapes.map(toPublic) };
+    return { shapes: shapes.map(toPublicShape) };
   });
 
   app.post("/location-shapes", { onRequest: [app.requireAuth] }, async (req, reply) => {
@@ -96,23 +82,27 @@ export const locationShapeRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(400).send({ error: "invalid_request", details: parsed.error.flatten() });
     }
     const data = parsed.data;
-    const shape = await prisma.locationShape.create({
-      data: {
-        name: data.name ?? null,
-        kind: data.kind,
-        color: data.color,
-        centerLat: data.centerLat,
-        centerLng: data.centerLng,
-        widthMeters: data.widthMeters,
-        heightMeters: data.heightMeters,
-        rotationDegrees: data.rotationDegrees ?? 0,
-        locked: data.locked ?? false,
-        polygonPoints: data.polygonPoints ?? undefined,
-        createdById: req.user!.id,
-      },
+    const shape = await prisma.$transaction(async (tx) => {
+      const s = await tx.locationShape.create({
+        data: {
+          name: data.name ?? null,
+          kind: data.kind,
+          color: data.color,
+          centerLat: data.centerLat,
+          centerLng: data.centerLng,
+          widthMeters: data.widthMeters,
+          heightMeters: data.heightMeters,
+          rotationDegrees: data.rotationDegrees ?? 0,
+          locked: data.locked ?? false,
+          polygonPoints: data.polygonPoints ?? undefined,
+          createdById: req.user!.id,
+        },
+      });
+      await createLocationTagForShape(tx, s);
+      return s;
     });
-    await reassignPlantsForShape(shape.id);
-    return reply.code(201).send({ shape: toPublic(shape) });
+    await reassignPlantsAfterShapeChange();
+    return reply.code(201).send({ shape: toPublicShape(shape) });
   });
 
   app.patch<{ Params: { id: string } }>(
@@ -123,15 +113,43 @@ export const locationShapeRoutes: FastifyPluginAsync = async (app) => {
       if (!parsed.success) {
         return reply.code(400).send({ error: "invalid_request" });
       }
-      const updated = await prisma.locationShape
-        .update({ where: { id: req.params.id }, data: parsed.data })
-        .catch((err: { code?: string }) => {
-          if (err.code === "P2025") return null;
-          throw err;
+      const data = parsed.data;
+      if (data.qrCode !== undefined) {
+        const current = await prisma.locationShape.findUnique({
+          where: { id: req.params.id },
+          select: { qrCode: true },
         });
+        if (!current) return reply.code(404).send({ error: "not_found" });
+        if (current.qrCode !== null) {
+          return reply.code(409).send({ error: "qr_code_locked" });
+        }
+        const taken = await prisma.locationShape.findUnique({
+          where: { qrCode: data.qrCode },
+          select: { id: true },
+        });
+        if (taken) return reply.code(409).send({ error: "qr_code_taken" });
+        const plantTaken = await prisma.plant.findUnique({
+          where: { qrCode: data.qrCode },
+          select: { id: true },
+        });
+        if (plantTaken) return reply.code(409).send({ error: "qr_code_taken" });
+      }
+      const updated = await prisma.$transaction(async (tx) => {
+        const u = await tx.locationShape
+          .update({ where: { id: req.params.id }, data })
+          .catch((err: { code?: string }) => {
+            if (err.code === "P2025") return null;
+            throw err;
+          });
+        if (!u) return null;
+        if (data.name !== undefined) {
+          await syncLocationTagName(tx, u);
+        }
+        return u;
+      });
       if (!updated) return reply.code(404).send({ error: "not_found" });
-      await reassignPlantsForShape(updated.id);
-      return { shape: toPublic(updated) };
+      await reassignPlantsAfterShapeChange();
+      return { shape: toPublicShape(updated) };
     },
   );
 
@@ -139,6 +157,8 @@ export const locationShapeRoutes: FastifyPluginAsync = async (app) => {
     "/location-shapes/:id",
     { onRequest: [app.requireAuth] },
     async (req, reply) => {
+      // The paired Tag (kind=location) and its M:M rows cascade via the FK on
+      // Tag.locationShapeId; no extra cleanup needed here.
       const result = await prisma.locationShape
         .delete({ where: { id: req.params.id } })
         .catch((err: { code?: string }) => {
@@ -146,7 +166,6 @@ export const locationShapeRoutes: FastifyPluginAsync = async (app) => {
           throw err;
         });
       if (!result) return reply.code(404).send({ error: "not_found" });
-      // Schema sets locationShapeId on plants to null on delete (onDelete: SetNull).
       return { ok: true };
     },
   );

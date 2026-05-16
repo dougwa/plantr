@@ -1,28 +1,42 @@
 import type { FastifyPluginAsync } from "fastify";
+import type { TagKind } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../db.js";
 
-const colorSchema = z
-  .string()
-  .regex(/^#[0-9a-fA-F]{6}$/, "color must be #RRGGBB");
-
 const createSchema = z.object({
   name: z.string().min(1).max(64),
-  color: colorSchema,
 });
 
 const patchSchema = z.object({
   name: z.string().min(1).max(64).optional(),
-  color: colorSchema.optional(),
 });
 
-function publicTag(t: { id: string; name: string; color: string }) {
-  return { id: t.id, name: t.name, color: t.color };
+export type PublicTag = {
+  id: string;
+  name: string;
+  kind: TagKind;
+  locationShapeId: string | null;
+};
+
+export function publicTag(t: {
+  id: string;
+  name: string;
+  kind: TagKind;
+  locationShapeId: string | null;
+}): PublicTag {
+  return {
+    id: t.id,
+    name: t.name,
+    kind: t.kind,
+    locationShapeId: t.locationShapeId,
+  };
 }
 
 export const tagRoutes: FastifyPluginAsync = async (app) => {
   app.get("/tags", { onRequest: [app.requireAuth] }, async () => {
-    const tags = await prisma.tag.findMany({ orderBy: { name: "asc" } });
+    const tags = await prisma.tag.findMany({
+      orderBy: [{ kind: "asc" }, { name: "asc" }],
+    });
     return { tags: tags.map(publicTag) };
   });
 
@@ -30,7 +44,7 @@ export const tagRoutes: FastifyPluginAsync = async (app) => {
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_request" });
     const t = await prisma.tag
-      .create({ data: { name: parsed.data.name, color: parsed.data.color } })
+      .create({ data: { name: parsed.data.name, kind: "custom" } })
       .catch((err: { code?: string }) => {
         if (err.code === "P2002") return null;
         throw err;
@@ -45,6 +59,14 @@ export const tagRoutes: FastifyPluginAsync = async (app) => {
     async (req, reply) => {
       const parsed = patchSchema.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: "invalid_request" });
+      const existing = await prisma.tag.findUnique({
+        where: { id: req.params.id },
+        select: { kind: true },
+      });
+      if (!existing) return reply.code(404).send({ error: "not_found" });
+      if (existing.kind !== "custom") {
+        return reply.code(409).send({ error: "managed_by_location" });
+      }
       const t = await prisma.tag
         .update({ where: { id: req.params.id }, data: parsed.data })
         .catch((err: { code?: string }) => {
@@ -62,13 +84,15 @@ export const tagRoutes: FastifyPluginAsync = async (app) => {
     "/tags/:id",
     { onRequest: [app.requireAuth] },
     async (req, reply) => {
-      const result = await prisma.tag
-        .delete({ where: { id: req.params.id } })
-        .catch((err: { code?: string }) => {
-          if (err.code === "P2025") return null;
-          throw err;
-        });
-      if (!result) return reply.code(404).send({ error: "not_found" });
+      const existing = await prisma.tag.findUnique({
+        where: { id: req.params.id },
+        select: { kind: true },
+      });
+      if (!existing) return reply.code(404).send({ error: "not_found" });
+      if (existing.kind !== "custom") {
+        return reply.code(409).send({ error: "managed_by_location" });
+      }
+      await prisma.tag.delete({ where: { id: req.params.id } });
       return { ok: true };
     },
   );
