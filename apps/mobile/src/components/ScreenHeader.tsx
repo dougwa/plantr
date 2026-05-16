@@ -5,10 +5,14 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 
 export default function ScreenHeader({
   title,
+  icon,
+  iconColor,
   onBack,
   right,
 }: {
   title: string;
+  icon?: keyof typeof Ionicons.glyphMap;
+  iconColor?: string;
   onBack?: () => void;
   right?: ReactNode;
 }) {
@@ -22,9 +26,19 @@ export default function ScreenHeader({
             </Pressable>
           ) : null}
         </View>
-        <Text style={styles.title} numberOfLines={1}>
-          {title}
-        </Text>
+        <View style={styles.titleWrap}>
+          {icon ? (
+            <Ionicons
+              name={icon}
+              size={18}
+              color={iconColor ?? "#171717"}
+              style={styles.titleIcon}
+            />
+          ) : null}
+          <Text style={styles.title} numberOfLines={1}>
+            {title}
+          </Text>
+        </View>
         <View style={[styles.side, styles.sideRight]}>{right}</View>
       </View>
     </SafeAreaView>
@@ -50,11 +64,18 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   sideRight: { alignItems: "flex-end" },
-  title: {
+  titleWrap: {
     flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+  },
+  titleIcon: {},
+  title: {
     fontSize: 17,
     fontWeight: "600",
     color: "#171717",
-    textAlign: "center",
+    flexShrink: 1,
   },
 });

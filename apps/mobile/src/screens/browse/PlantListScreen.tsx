@@ -39,6 +39,21 @@ function iconForTags(tagNames: string[]): keyof typeof Ionicons.glyphMap {
   return "leaf-outline";
 }
 
+function headerIconForFilter(
+  filter: PlantFilter,
+): { icon: keyof typeof Ionicons.glyphMap; color: string } {
+  switch (filter.kind) {
+    case "all":
+      return { icon: "apps-outline", color: "#171717" };
+    case "tag":
+      return { icon: tagKindStyle("custom").icon, color: tagKindStyle("custom").color };
+    case "location":
+      return { icon: tagKindStyle("location").icon, color: tagKindStyle("location").color };
+    case "species":
+      return { icon: "leaf-outline", color: "#16a34a" };
+  }
+}
+
 function matchesFilter(p: PlantListItem, f: PlantFilter): boolean {
   switch (f.kind) {
     case "all":
@@ -117,9 +132,12 @@ export default function PlantListScreen() {
     nav.push("PlantDetail", { plantId });
   }
 
+  const headerIcon = headerIconForFilter(route.params.filter);
   const header = (
     <ScreenHeader
       title={route.params.title}
+      icon={headerIcon.icon}
+      iconColor={headerIcon.color}
       onBack={() => nav.goBack()}
       right={
         <Pressable
