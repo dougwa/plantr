@@ -9,14 +9,16 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import type { BrowseStackParamList } from "../../navigation/BrowseStackTypes";
+import type { RootStackParamList } from "../../navigation/types";
+import { TAG_KIND_STYLES } from "../../lib/tagStyle";
 
-type Nav = NativeStackNavigationProp<BrowseStackParamList, "BrowseHome">;
+type Nav = NativeStackNavigationProp<RootStackParamList, "Browse">;
 
 type Tile = {
   key: string;
   label: string;
   icon: keyof typeof Ionicons.glyphMap;
+  iconColor?: string;
   onPress: (nav: Nav) => void;
 };
 
@@ -25,32 +27,34 @@ const TILES: Tile[] = [
     key: "search",
     label: "Search",
     icon: "search-outline",
-    onPress: (nav) => nav.navigate("BrowseSearch"),
+    onPress: (nav) => nav.push("BrowseSearch"),
   },
   {
     key: "location",
-    label: "Location",
-    icon: "location-outline",
-    onPress: (nav) => nav.navigate("BrowseEntries", { category: "location" }),
+    label: "Locations",
+    icon: TAG_KIND_STYLES.location.icon,
+    iconColor: TAG_KIND_STYLES.location.color,
+    onPress: (nav) => nav.push("BrowseEntries", { category: "location" }),
   },
   {
     key: "tag",
-    label: "Tags",
-    icon: "pricetags-outline",
-    onPress: (nav) => nav.navigate("BrowseEntries", { category: "tag" }),
+    label: "Custom Tags",
+    icon: TAG_KIND_STYLES.custom.icon,
+    iconColor: TAG_KIND_STYLES.custom.color,
+    onPress: (nav) => nav.push("BrowseEntries", { category: "tag" }),
   },
   {
     key: "species",
     label: "Species",
     icon: "leaf-outline",
-    onPress: (nav) => nav.navigate("BrowseEntries", { category: "species" }),
+    onPress: (nav) => nav.push("BrowseEntries", { category: "species" }),
   },
   {
     key: "all",
     label: "All",
     icon: "apps-outline",
     onPress: (nav) =>
-      nav.navigate("PlantList", { filter: { kind: "all" }, title: "All plants" }),
+      nav.push("PlantList", { filter: { kind: "all" }, title: "All plants" }),
   },
 ];
 
@@ -70,7 +74,7 @@ export default function BrowseHomeScreen() {
               ]}
               onPress={() => t.onPress(nav)}
             >
-              <Ionicons name={t.icon} size={36} color="#16a34a" />
+              <Ionicons name={t.icon} size={36} color={t.iconColor ?? "#16a34a"} />
               <Text style={styles.tileLabel}>{t.label}</Text>
             </Pressable>
           ))}

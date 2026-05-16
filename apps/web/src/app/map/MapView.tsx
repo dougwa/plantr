@@ -14,6 +14,7 @@ import {
 import type { LatLngBoundsExpression, LatLngExpression } from "leaflet";
 import "leaflet/dist/leaflet.css";
 import type { LocationShape, PlantListItem } from "@/lib/api";
+import { tagKindStyle } from "@/lib/tagStyle";
 
 const DEFAULT_CENTER: LatLngExpression = [47.61, -122.34];
 const DEFAULT_ZOOM = 18;
@@ -167,15 +168,25 @@ export default function MapView({ plants, shapes, mapboxToken }: Props) {
                 <div className="text-neutral-500 text-xs">{p.qrCode}</div>
                 {p.tags.length > 0 && (
                   <div className="mt-1 flex flex-wrap gap-1">
-                    {p.tags.map((t) => (
-                      <span
-                        key={t.id}
-                        className="rounded-full px-1.5 py-0.5 text-[10px] font-medium text-white"
-                        style={{ backgroundColor: t.color }}
-                      >
-                        {t.name}
-                      </span>
-                    ))}
+                    {p.tags.map((t) => {
+                      const style = tagKindStyle(t.kind);
+                      return (
+                        <span
+                          key={t.id}
+                          className="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium text-white"
+                          style={{ backgroundColor: style.color }}
+                        >
+                          <svg
+                            viewBox="0 0 24 24"
+                            className="h-2.5 w-2.5 fill-current"
+                            aria-hidden="true"
+                          >
+                            <path d={style.iconPath} />
+                          </svg>
+                          {t.name}
+                        </span>
+                      );
+                    })}
                   </div>
                 )}
               </div>

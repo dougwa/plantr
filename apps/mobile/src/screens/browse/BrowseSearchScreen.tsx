@@ -14,17 +14,15 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import AuthImage from "../../components/AuthImage";
 import { useAuth } from "../../contexts/AuthContext";
 import {
-  listLocationShapes,
   listPlants,
   listTags,
-  type LocationShape,
   type PlantListItem,
   type Tag,
 } from "../../lib/api";
-import { shapeIdsForPlant } from "../../lib/geometry";
 import type { RootStackParamList } from "../../navigation/types";
+import ScreenHeader from "../../components/ScreenHeader";
 
-type RootNav = NativeStackNavigationProp<RootStackParamList>;
+type Nav = NativeStackNavigationProp<RootStackParamList>;
 
 type Field = "name" | "location" | "tag" | "species" | "id";
 const FIELDS: Field[] = ["name", "location", "tag", "species", "id"];
@@ -95,12 +93,7 @@ function includesCi(haystack: string | null | undefined, needle: string): boolea
   return haystack.toLowerCase().includes(needle.toLowerCase());
 }
 
-function plantMatchesToken(
-  p: PlantListItem,
-  shapesById: Map<string, LocationShape>,
-  shapeIds: Set<string>,
-  token: Token,
-): boolean {
+function plantMatchesToken(p: PlantListItem, token: Token): boolean {
   const v = token.value.trim();
   if (!v) return true;
   switch (token.field) {
@@ -111,23 +104,14 @@ function plantMatchesToken(
     case "species":
       return includesCi(p.species, v);
     case "tag":
-      return p.tags.some((t) => includesCi(t.name, v));
-    case "location": {
-      for (const id of shapeIds) {
-        const s = shapesById.get(id);
-        if (s && includesCi(s.name, v)) return true;
-      }
-      return false;
-    }
+      return p.tags.some((t) => t.kind === "custom" && includesCi(t.name, v));
+    case "location":
+      return p.tags.some((t) => t.kind === "location" && includesCi(t.name, v));
     case null: {
       if (includesCi(p.name, v)) return true;
       if (includesCi(p.qrCode, v)) return true;
       if (includesCi(p.species, v)) return true;
       if (p.tags.some((t) => includesCi(t.name, v))) return true;
-      for (const id of shapeIds) {
-        const s = shapesById.get(id);
-        if (s && includesCi(s.name, v)) return true;
-      }
       return false;
     }
   }
@@ -138,7 +122,6 @@ type Suggestion = { display: string; replacement: string };
 function buildSuggestions(
   lastRaw: string,
   tags: Tag[],
-  shapes: LocationShape[],
   speciesValues: string[],
 ): Suggestion[] {
   if (!lastRaw) return [];
@@ -166,9 +149,9 @@ function buildSuggestions(
 
   let candidates: string[] = [];
   if (field === "tag") {
-    candidates = tags.map((t) => t.name);
+    candidates = tags.filter((t) => t.kind === "custom").map((t) => t.name);
   } else if (field === "location") {
-    candidates = shapes.map((s) => s.name?.trim() ?? "").filter(Boolean);
+    candidates = tags.filter((t) => t.kind === "location").map((t) => t.name);
   } else if (field === "species") {
     candidates = speciesValues;
   } else {
@@ -206,25 +189,19 @@ function iconForTags(tagNames: string[]): keyof typeof Ionicons.glyphMap {
 }
 
 export default function BrowseSearchScreen() {
-  const rootNav = useNavigation<RootNav>();
+  const nav = useNavigation<Nav>();
   const { state } = useAuth();
   const token = state.status === "authed" ? state.token : null;
 
   const [plants, setPlants] = useState<PlantListItem[]>([]);
-  const [shapes, setShapes] = useState<LocationShape[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState("");
 
   const reload = useCallback(async () => {
     if (!token) return;
-    const [pRes, sRes, tRes] = await Promise.all([
-      listPlants(token),
-      listLocationShapes(token),
-      listTags(token),
-    ]);
+    const [pRes, tRes] = await Promise.all([listPlants(token), listTags(token)]);
     if (pRes.ok) setPlants(pRes.data.plants);
-    if (sRes.ok) setShapes(sRes.data.shapes);
     if (tRes.ok) setTags(tRes.data.tags);
   }, [token]);
 
@@ -242,12 +219,6 @@ export default function BrowseSearchScreen() {
     }, [reload]),
   );
 
-  const shapesById = useMemo(() => {
-    const m = new Map<string, LocationShape>();
-    for (const s of shapes) m.set(s.id, s);
-    return m;
-  }, [shapes]);
-
   const speciesValues = useMemo(() => {
     const set = new Set<string>();
     for (const p of plants) {
@@ -261,21 +232,14 @@ export default function BrowseSearchScreen() {
 
   const results = useMemo(() => {
     if (parsed.tokens.length === 0) return plants;
-    const plantShapes = new Map<string, Set<string>>();
-    for (const p of plants) {
-      plantShapes.set(p.id, shapeIdsForPlant(p, shapes));
-    }
-    return plants.filter((p) => {
-      const ids = plantShapes.get(p.id) ?? new Set<string>();
-      return parsed.tokens.every((t) =>
-        plantMatchesToken(p, shapesById, ids, t),
-      );
-    });
-  }, [parsed, plants, shapes, shapesById]);
+    return plants.filter((p) =>
+      parsed.tokens.every((t) => plantMatchesToken(p, t)),
+    );
+  }, [parsed, plants]);
 
   const suggestions = useMemo(
-    () => buildSuggestions(parsed.lastTokenRaw, tags, shapes, speciesValues),
-    [parsed.lastTokenRaw, tags, shapes, speciesValues],
+    () => buildSuggestions(parsed.lastTokenRaw, tags, speciesValues),
+    [parsed.lastTokenRaw, tags, speciesValues],
   );
 
   function applySuggestion(s: Suggestion) {
@@ -284,11 +248,12 @@ export default function BrowseSearchScreen() {
   }
 
   function open(plantId: string) {
-    rootNav.navigate("PlantDetail", { plantId });
+    nav.push("PlantDetail", { plantId });
   }
 
   return (
     <View style={styles.root}>
+      <ScreenHeader title="Search" onBack={() => nav.goBack()} />
       <View style={styles.searchBox}>
         <Ionicons name="search" size={18} color="#737373" />
         <TextInput

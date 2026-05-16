@@ -18,7 +18,7 @@ import {
   useWindowDimensions,
 } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   GestureHandlerRootView,
   PanGestureHandler,
@@ -49,7 +49,10 @@ import {
   type Tag,
 } from "../lib/api";
 import AuthImage from "../components/AuthImage";
+import ScreenHeader from "../components/ScreenHeader";
 import type { RootStackParamList } from "../navigation/types";
+import type { PlantFilter } from "../navigation/BrowseStackTypes";
+import { tagKindStyle } from "../lib/tagStyle";
 
 type Route = RouteProp<RootStackParamList, "PlantDetail">;
 
@@ -377,6 +380,14 @@ export default function PlantDetailScreen() {
     nav.goBack();
   }
 
+  function openTagBrowse(tag: Tag) {
+    const filter: PlantFilter =
+      tag.kind === "location"
+        ? { kind: "location", tagId: tag.id, label: tag.name }
+        : { kind: "tag", tagId: tag.id, label: tag.name };
+    nav.push("PlantList", { filter, title: tag.name });
+  }
+
   if (loading || !plant) {
     return (
       <View style={styles.loading}>
@@ -387,19 +398,15 @@ export default function PlantDetailScreen() {
 
   return (
     <View style={styles.root}>
-      <SafeAreaView edges={["top"]} style={styles.headerSafe}>
-        <View style={styles.header}>
-          <Pressable onPress={() => nav.goBack()} hitSlop={12}>
-            <Ionicons name="chevron-back" size={28} color="#171717" />
-          </Pressable>
-          <Text style={styles.qrCode} numberOfLines={1}>
-            {plant.qrCode}
-          </Text>
+      <ScreenHeader
+        title={plant.qrCode}
+        onBack={() => nav.goBack()}
+        right={
           <Pressable onPress={openPlantMenu} hitSlop={12}>
             <Ionicons name="ellipsis-horizontal" size={24} color="#171717" />
           </Pressable>
-        </View>
-      </SafeAreaView>
+        }
+      />
 
       <ScrollView
         contentContainerStyle={styles.scroll}
@@ -435,25 +442,41 @@ export default function PlantDetailScreen() {
             onSave={(v) => patch({ name: v || null })}
             big
           />
-          <Pressable
-            onPress={() => setTagPickerOpen(true)}
-            style={[styles.row, styles.rowMultiline]}
-          >
-            <Text style={styles.rowLabel}>Tags</Text>
+          <View style={[styles.row, styles.rowMultiline]}>
+            <Pressable
+              onPress={() => setTagPickerOpen(true)}
+              hitSlop={6}
+              style={styles.rowLabelPressable}
+            >
+              <Text style={styles.rowLabel}>Tags</Text>
+            </Pressable>
             <View style={styles.rowValueWrap}>
               {plant.tags.length > 0 ? (
                 <View style={styles.tagWrap}>
                   {plant.tags.map((t) => (
-                    <TagBubble key={t.id} tag={t} />
+                    <Pressable
+                      key={t.id}
+                      onPress={() => openTagBrowse(t)}
+                      hitSlop={4}
+                    >
+                      <TagBubble tag={t} />
+                    </Pressable>
                   ))}
+                  <Pressable onPress={() => setTagPickerOpen(true)} hitSlop={8}>
+                    <View style={styles.tagBubbleAdd}>
+                      <Ionicons name="add" size={14} color="#525252" />
+                    </View>
+                  </Pressable>
                 </View>
               ) : (
-                <Text style={[styles.rowValue, styles.placeholderValue]}>
-                  Add tags
-                </Text>
+                <Pressable onPress={() => setTagPickerOpen(true)}>
+                  <Text style={[styles.rowValue, styles.placeholderValue]}>
+                    Add tags
+                  </Text>
+                </Pressable>
               )}
             </View>
-          </Pressable>
+          </View>
           <EditableText
             label="Species"
             value={plant.species}
@@ -603,12 +626,17 @@ export default function PlantDetailScreen() {
 
       <TagPickerModal
         visible={tagPickerOpen}
-        tags={tags}
-        selectedIds={plant.tags.map((t) => t.id)}
+        tags={tags.filter((t) => t.kind === "custom")}
+        selectedIds={plant.tags.filter((t) => t.kind === "custom").map((t) => t.id)}
         onClose={() => setTagPickerOpen(false)}
-        onSave={async (ids) => {
+        onSave={async (customIds) => {
           setTagPickerOpen(false);
-          await patch({ tagIds: ids });
+          // Preserve auto-managed location tags — they're driven by GPS and
+          // can't be set from the picker.
+          const locationIds = plant.tags
+            .filter((t) => t.kind === "location")
+            .map((t) => t.id);
+          await patch({ tagIds: [...customIds, ...locationIds] });
         }}
       />
 
@@ -716,14 +744,16 @@ function EditableText({
 }
 
 function TagBubble({ tag, dim }: { tag: Tag; dim?: boolean }) {
+  const style = tagKindStyle(tag.kind);
   return (
     <View
       style={[
         styles.tagBubble,
-        { backgroundColor: tag.color },
+        { backgroundColor: style.color },
         dim && { opacity: 0.35 },
       ]}
     >
+      <Ionicons name={style.icon} size={12} color="#fff" />
       <Text style={styles.tagBubbleText} numberOfLines={1}>
         {tag.name}
       </Text>
@@ -770,7 +800,7 @@ function TagPickerModal({
           <Text style={styles.modalTitle}>Choose tags</Text>
           {tags.length === 0 ? (
             <Text style={styles.tagPickerEmpty}>
-              No tags yet — add some in Settings.
+              No custom tags yet — add some in Settings.
             </Text>
           ) : (
             <FlatList
@@ -876,15 +906,6 @@ function ActionRow({
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#fafafa" },
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
-  headerSafe: { backgroundColor: "#fff", borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "#e5e5e5" },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  qrCode: { fontSize: 13, color: "#737373", flex: 1, textAlign: "center" },
   scroll: { paddingBottom: 32 },
 
   coverWrap: { backgroundColor: "#000" },
@@ -1025,6 +1046,9 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   tagBubble: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 999,
@@ -1036,6 +1060,17 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "500",
   },
+  tagBubbleAdd: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#d4d4d4",
+    borderStyle: "dashed",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  rowLabelPressable: { width: 100 },
   tagPickerRow: {
     flexDirection: "row",
     alignItems: "center",

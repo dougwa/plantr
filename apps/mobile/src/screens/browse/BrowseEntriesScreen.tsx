@@ -12,33 +12,31 @@ import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useAuth } from "../../contexts/AuthContext";
 import {
-  listLocationShapes,
   listPlants,
   listTags,
-  type LocationShape,
   type PlantListItem,
   type Tag,
 } from "../../lib/api";
-import { shapeIdsForPlant } from "../../lib/geometry";
-import type {
-  BrowseStackParamList,
-  PlantFilter,
-} from "../../navigation/BrowseStackTypes";
+import { tagKindStyle } from "../../lib/tagStyle";
+import type { PlantFilter } from "../../navigation/BrowseStackTypes";
+import type { RootStackParamList } from "../../navigation/types";
+import ScreenHeader from "../../components/ScreenHeader";
 
-type Nav = NativeStackNavigationProp<BrowseStackParamList, "BrowseEntries">;
-type Route = RouteProp<BrowseStackParamList, "BrowseEntries">;
+type Nav = NativeStackNavigationProp<RootStackParamList, "BrowseEntries">;
+type Route = RouteProp<RootStackParamList, "BrowseEntries">;
 
 type Entry = {
   key: string;
   label: string;
   count: number;
   filter: PlantFilter;
-  color?: string;
+  icon?: keyof typeof Ionicons.glyphMap;
+  iconColor?: string;
 };
 
 const CATEGORY_TITLES: Record<string, string> = {
   location: "Locations",
-  tag: "Tags",
+  tag: "Custom Tags",
   species: "Species",
 };
 
@@ -49,25 +47,17 @@ export default function BrowseEntriesScreen() {
   const token = state.status === "authed" ? state.token : null;
 
   const [plants, setPlants] = useState<PlantListItem[]>([]);
-  const [shapes, setShapes] = useState<LocationShape[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    nav.setOptions({ title: CATEGORY_TITLES[route.params.category] ?? "Browse" });
-  }, [nav, route.params.category]);
+  const title = CATEGORY_TITLES[route.params.category] ?? "Browse";
 
   useEffect(() => {
     if (!token) return;
     (async () => {
       setLoading(true);
-      const [pRes, sRes, tRes] = await Promise.all([
-        listPlants(token),
-        listLocationShapes(token),
-        listTags(token),
-      ]);
+      const [pRes, tRes] = await Promise.all([listPlants(token), listTags(token)]);
       if (pRes.ok) setPlants(pRes.data.plants);
-      if (sRes.ok) setShapes(sRes.data.shapes);
       if (tRes.ok) setTags(tRes.data.tags);
       setLoading(false);
     })();
@@ -75,73 +65,50 @@ export default function BrowseEntriesScreen() {
 
   const entries: Entry[] = useMemo(() => {
     const cat = route.params.category;
-    if (cat === "location") {
+
+    if (cat === "location" || cat === "tag") {
+      const wantKind = cat === "location" ? "location" : "custom";
+      const style = tagKindStyle(wantKind);
+      const tagsOfKind = tags.filter((t) => t.kind === wantKind);
       const counts = new Map<string, number>();
       let unassignedCount = 0;
       for (const p of plants) {
-        const ids = shapeIdsForPlant(p, shapes);
-        if (ids.size === 0) {
+        const matching = p.tags.filter((t) => t.kind === wantKind);
+        if (matching.length === 0) {
           unassignedCount += 1;
           continue;
         }
-        for (const id of ids) {
-          counts.set(id, (counts.get(id) ?? 0) + 1);
-        }
+        for (const t of matching) counts.set(t.id, (counts.get(t.id) ?? 0) + 1);
       }
-      const named: Entry[] = shapes
-        .map((s) => ({
-          key: s.id,
-          label: s.name?.trim() || "(unnamed)",
-          count: counts.get(s.id) ?? 0,
-          filter: {
-            kind: "location" as const,
-            shapeId: s.id,
-            label: s.name?.trim() || "(unnamed)",
-          },
-        }))
-        .sort((a, b) => a.label.localeCompare(b.label));
-      if (unassignedCount > 0) {
-        named.push({
-          key: "__unassigned",
-          label: "Unassigned",
-          count: unassignedCount,
-          filter: { kind: "location", shapeId: null, label: "Unassigned" },
-        });
-      }
-      return named;
-    }
-    if (cat === "tag") {
-      const counts = new Map<string, number>();
-      let unassignedCount = 0;
-      for (const p of plants) {
-        if (p.tags.length === 0) {
-          unassignedCount += 1;
-          continue;
-        }
-        for (const t of p.tags) {
-          counts.set(t.id, (counts.get(t.id) ?? 0) + 1);
-        }
-      }
-      const named: Entry[] = tags
+      const named: Entry[] = tagsOfKind
         .map((t) => ({
           key: t.id,
           label: t.name,
           count: counts.get(t.id) ?? 0,
-          color: t.color,
-          filter: { kind: "tag" as const, tagId: t.id, label: t.name },
+          icon: style.icon,
+          iconColor: style.color,
+          filter:
+            cat === "location"
+              ? { kind: "location" as const, tagId: t.id, label: t.name }
+              : { kind: "tag" as const, tagId: t.id, label: t.name },
         }))
-        .filter((e) => e.count > 0)
+        .filter((e) => (cat === "location" ? true : e.count > 0))
         .sort((a, b) => a.label.localeCompare(b.label));
       if (unassignedCount > 0) {
+        const unassignedLabel = cat === "location" ? "Unassigned" : "Untagged";
         named.push({
           key: "__unassigned",
-          label: "Untagged",
+          label: unassignedLabel,
           count: unassignedCount,
-          filter: { kind: "tag", tagId: null, label: "Untagged" },
+          filter:
+            cat === "location"
+              ? { kind: "location", tagId: null, label: unassignedLabel }
+              : { kind: "tag", tagId: null, label: unassignedLabel },
         });
       }
       return named;
     }
+
     // species
     const counts = new Map<string | null, number>();
     for (const p of plants) {
@@ -169,51 +136,49 @@ export default function BrowseEntriesScreen() {
       });
     }
     return named;
-  }, [plants, shapes, tags, route.params.category]);
-
-  if (loading) {
-    return (
-      <View style={styles.center}>
-        <ActivityIndicator />
-      </View>
-    );
-  }
-
-  if (entries.length === 0) {
-    return (
-      <View style={styles.center}>
-        <Text style={styles.empty}>Nothing to browse yet.</Text>
-      </View>
-    );
-  }
+  }, [plants, tags, route.params.category]);
 
   return (
-    <FlatList
-      style={styles.list}
-      data={entries}
-      keyExtractor={(e) => e.key}
-      renderItem={({ item }) => (
-        <Pressable
-          style={({ pressed }) => [styles.row, pressed && { backgroundColor: "#f5f5f5" }]}
-          onPress={() =>
-            nav.navigate("PlantList", { filter: item.filter, title: item.label })
-          }
-        >
-          {item.color && (
-            <View style={[styles.tagDot, { backgroundColor: item.color }]} />
+    <View style={styles.root}>
+      <ScreenHeader title={title} onBack={() => nav.goBack()} />
+      {loading ? (
+        <View style={styles.center}>
+          <ActivityIndicator />
+        </View>
+      ) : entries.length === 0 ? (
+        <View style={styles.center}>
+          <Text style={styles.empty}>Nothing to browse yet.</Text>
+        </View>
+      ) : (
+        <FlatList
+          style={styles.list}
+          data={entries}
+          keyExtractor={(e) => e.key}
+          renderItem={({ item }) => (
+            <Pressable
+              style={({ pressed }) => [styles.row, pressed && { backgroundColor: "#f5f5f5" }]}
+              onPress={() =>
+                nav.push("PlantList", { filter: item.filter, title: item.label })
+              }
+            >
+              {item.icon && (
+                <Ionicons name={item.icon} size={16} color={item.iconColor ?? "#737373"} />
+              )}
+              <Text style={styles.rowLabel}>{item.label}</Text>
+              <View style={styles.rowRight}>
+                <Text style={styles.rowCount}>{item.count}</Text>
+                <Ionicons name="chevron-forward" size={18} color="#a3a3a3" />
+              </View>
+            </Pressable>
           )}
-          <Text style={styles.rowLabel}>{item.label}</Text>
-          <View style={styles.rowRight}>
-            <Text style={styles.rowCount}>{item.count}</Text>
-            <Ionicons name="chevron-forward" size={18} color="#a3a3a3" />
-          </View>
-        </Pressable>
+        />
       )}
-    />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: "#fff" },
   list: { flex: 1, backgroundColor: "#fff" },
   center: {
     flex: 1,
@@ -230,11 +195,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-  },
-  tagDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
   },
   rowLabel: { fontSize: 16, color: "#171717", flex: 1 },
   rowRight: { flexDirection: "row", alignItems: "center", gap: 8 },

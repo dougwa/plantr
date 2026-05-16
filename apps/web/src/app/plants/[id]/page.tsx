@@ -1,7 +1,8 @@
 import { notFound } from "next/navigation";
 import { cookies } from "next/headers";
 import Link from "next/link";
-import { fetchPlantServerSide, photoUrl, type PublicAction } from "@/lib/api";
+import { fetchPlantServerSide, photoUrl, type PublicAction, type Tag } from "@/lib/api";
+import { tagKindStyle } from "@/lib/tagStyle";
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
@@ -67,13 +68,7 @@ export default async function PlantPage({ params }: { params: Promise<{ id: stri
           {plant.tags.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-1.5">
               {plant.tags.map((t) => (
-                <span
-                  key={t.id}
-                  className="rounded-full px-2.5 py-0.5 text-xs font-medium text-white"
-                  style={{ backgroundColor: t.color }}
-                >
-                  {t.name}
-                </span>
+                <TagChip key={t.id} tag={t} />
               ))}
             </div>
           )}
@@ -129,6 +124,25 @@ export default async function PlantPage({ params }: { params: Promise<{ id: stri
         </section>
       </div>
     </main>
+  );
+}
+
+function TagChip({ tag }: { tag: Tag }) {
+  const style = tagKindStyle(tag.kind);
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium text-white"
+      style={{ backgroundColor: style.color }}
+    >
+      <svg
+        viewBox="0 0 24 24"
+        className="h-3 w-3 fill-current"
+        aria-hidden="true"
+      >
+        <path d={style.iconPath} />
+      </svg>
+      {tag.name}
+    </span>
   );
 }
 

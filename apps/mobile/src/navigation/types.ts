@@ -1,19 +1,18 @@
-import type { NavigatorScreenParams } from "@react-navigation/native";
-import type { BrowseStackParamList } from "./BrowseStackTypes";
-
-export type TabParamList = {
-  Map: undefined;
-  Browse: NavigatorScreenParams<BrowseStackParamList>;
-  ScanTab: undefined;
-  Reports: undefined;
-  Settings: undefined;
-};
+import type { BrowseCategory, PlantFilter } from "./BrowseStackTypes";
 
 export type RootStackParamList = {
-  Tabs: NavigatorScreenParams<TabParamList>;
-  Scan: undefined;
+  Map: undefined;
+  Browse: undefined;
+  Reports: undefined;
+  Settings: undefined;
+  BrowseEntries: { category: BrowseCategory };
+  BrowseSearch: undefined;
+  PlantList: { filter: PlantFilter; title: string };
   PlantDetail: { plantId: string };
+  Scan: undefined;
 };
+
+export type RootTab = "Map" | "Browse" | "Reports" | "Settings";
 
 declare global {
   namespace ReactNavigation {

@@ -28,11 +28,7 @@ import MapView, {
 import * as Location from "expo-location";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { SafeAreaView } from "react-native-safe-area-context";
-import {
-  CommonActions,
-  useFocusEffect,
-  useNavigation,
-} from "@react-navigation/native";
+import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useAuth } from "../contexts/AuthContext";
 import { loadViewport, saveViewport } from "../lib/storage";
@@ -41,9 +37,11 @@ import {
   deleteLocationShape,
   listLocationShapes,
   listPlants,
+  listTags,
   patchLocationShape,
   type LocationShape,
   type PlantListItem,
+  type Tag,
 } from "../lib/api";
 import type { RootStackParamList } from "../navigation/types";
 
@@ -282,6 +280,7 @@ export default function MapScreen() {
   const mapRef = useRef<MapView>(null);
   const [plants, setPlants] = useState<PlantListItem[]>([]);
   const [shapes, setShapes] = useState<LocationShape[]>([]);
+  const [tags, setTags] = useState<Tag[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [picker, setPicker] = useState<PlantListItem[] | null>(null);
@@ -296,12 +295,14 @@ export default function MapScreen() {
 
   const reload = useCallback(async () => {
     if (!token) return;
-    const [pRes, sRes] = await Promise.all([
+    const [pRes, sRes, tRes] = await Promise.all([
       listPlants(token),
       listLocationShapes(token),
+      listTags(token),
     ]);
     if (pRes.ok) setPlants(pRes.data.plants);
     if (sRes.ok) setShapes(sRes.data.shapes);
+    if (tRes.ok) setTags(tRes.data.tags);
   }, [token]);
 
   useEffect(() => {
@@ -533,33 +534,12 @@ export default function MapScreen() {
   }
 
   function viewPlantsAtShape(s: LocationShape) {
-    const label = s.name?.trim() || "(unnamed)";
-    nav.dispatch(
-      CommonActions.navigate({
-        name: "Tabs",
-        params: {
-          screen: "Browse",
-          params: {
-            state: {
-              routes: [
-                { name: "BrowseHome" },
-                {
-                  name: "BrowseEntries",
-                  params: { category: "location" },
-                },
-                {
-                  name: "PlantList",
-                  params: {
-                    filter: { kind: "location", shapeId: s.id, label },
-                    title: label,
-                  },
-                },
-              ],
-            },
-          },
-        },
-      }),
-    );
+    const tag = tags.find((t) => t.kind === "location" && t.locationShapeId === s.id);
+    const label = tag?.name ?? s.name?.trim() ?? "(unnamed)";
+    nav.push("PlantList", {
+      filter: { kind: "location", tagId: tag?.id ?? null, label },
+      title: label,
+    });
   }
 
   function onMapLongPress(e: LongPressEvent) {
@@ -576,13 +556,13 @@ export default function MapScreen() {
     if (nearby.length > 1) {
       setPicker(nearby);
     } else {
-      nav.navigate("PlantDetail", { plantId: p.id });
+      nav.push("PlantDetail", { plantId: p.id });
     }
   }
 
   function pickFromCluster(plantId: string) {
     setPicker(null);
-    nav.navigate("PlantDetail", { plantId });
+    nav.push("PlantDetail", { plantId });
   }
 
   async function recenterOnUser() {

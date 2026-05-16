@@ -1,4 +1,4 @@
-import type { LocationShape, PlantListItem } from "./api";
+import type { LocationShape } from "./api";
 
 const METERS_PER_DEGREE_LAT = 111_320;
 
@@ -33,22 +33,4 @@ export function pointInShape(
     return rx * rx + ry * ry <= 1;
   }
   return Math.abs(local.x) <= halfW && Math.abs(local.y) <= halfH;
-}
-
-// Returns the set of shape ids that "contain" the plant. A plant with GPS
-// belongs to every shape whose geometry covers its coordinates (so overlapping
-// shapes both list it). The plant's explicit locationShapeId is always
-// included so manual assignments aren't lost when GPS is missing or stale.
-export function shapeIdsForPlant(
-  plant: PlantListItem,
-  shapes: LocationShape[],
-): Set<string> {
-  const ids = new Set<string>();
-  if (plant.locationShapeId) ids.add(plant.locationShapeId);
-  if (plant.gpsLat != null && plant.gpsLng != null) {
-    for (const s of shapes) {
-      if (pointInShape(s, plant.gpsLat, plant.gpsLng)) ids.add(s.id);
-    }
-  }
-  return ids;
 }

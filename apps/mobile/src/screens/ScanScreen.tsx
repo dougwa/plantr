@@ -41,6 +41,7 @@ import {
   type PublicPlant,
   type Tag,
 } from "../lib/api";
+import { tagKindStyle } from "../lib/tagStyle";
 import type { RootStackParamList } from "../navigation/types";
 import AuthImage from "../components/AuthImage";
 
@@ -189,20 +190,16 @@ export default function ScanScreen() {
   }
 
   function openShapeInBrowse(shape: LocationShape) {
+    // Map the scanned shape to its paired location-kind tag so the browse
+    // filter matches the tag-based model.
+    const locationTag = tags.find(
+      (t) => t.kind === "location" && t.locationShapeId === shape.id,
+    );
+    const label = locationTag?.name ?? shape.name ?? "Unnamed location";
     nav.goBack();
-    nav.navigate("Tabs", {
-      screen: "Browse",
-      params: {
-        screen: "PlantList",
-        params: {
-          filter: {
-            kind: "location",
-            shapeId: shape.id,
-            label: shape.name ?? "Unnamed location",
-          },
-          title: shape.name ?? "Unnamed location",
-        },
-      },
+    nav.push("PlantList", {
+      filter: { kind: "location", tagId: locationTag?.id ?? null, label },
+      title: label,
     });
   }
 
@@ -553,16 +550,20 @@ export default function ScanScreen() {
                     </Text>
                   ) : (
                     <View style={styles.brushTagWrap}>
-                      {brushSelectedTags.map((t) => (
-                        <View
-                          key={t.id}
-                          style={[styles.tagBubble, { backgroundColor: t.color }]}
-                        >
-                          <Text style={styles.tagBubbleText} numberOfLines={1}>
-                            {t.name}
-                          </Text>
-                        </View>
-                      ))}
+                      {brushSelectedTags.map((t) => {
+                        const s = tagKindStyle(t.kind);
+                        return (
+                          <View
+                            key={t.id}
+                            style={[styles.tagBubble, { backgroundColor: s.color }]}
+                          >
+                            <Ionicons name={s.icon} size={12} color="#fff" />
+                            <Text style={styles.tagBubbleText} numberOfLines={1}>
+                              {t.name}
+                            </Text>
+                          </View>
+                        );
+                      })}
                     </View>
                   )}
                   <Ionicons name="chevron-forward" size={18} color="#a3a3a3" />
@@ -658,14 +659,15 @@ export default function ScanScreen() {
               <Text style={styles.modalTitle}>Choose tags</Text>
               {tags.length === 0 ? (
                 <Text style={styles.tagPickerEmpty}>
-                  No tags yet — add some in Settings.
+                  No custom tags yet — add some in Settings.
                 </Text>
               ) : (
                 <FlatList
-                  data={tags}
+                  data={tags.filter((t) => t.kind === "custom")}
                   keyExtractor={(t) => t.id}
                   renderItem={({ item }) => {
                     const on = brush.tagIds.includes(item.id);
+                    const s = tagKindStyle(item.kind);
                     return (
                       <TouchableOpacity
                         style={styles.tagPickerRow}
@@ -674,10 +676,11 @@ export default function ScanScreen() {
                         <View
                           style={[
                             styles.tagBubble,
-                            { backgroundColor: item.color },
+                            { backgroundColor: s.color },
                             !on && { opacity: 0.35 },
                           ]}
                         >
+                          <Ionicons name={s.icon} size={12} color="#fff" />
                           <Text style={styles.tagBubbleText} numberOfLines={1}>
                             {item.name}
                           </Text>
@@ -1125,6 +1128,9 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
   },
   tagBubble: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 999,

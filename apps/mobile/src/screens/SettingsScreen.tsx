@@ -31,17 +31,7 @@ import {
   updateTag,
   type Tag,
 } from "../lib/api";
-
-const TAG_COLORS = [
-  "#16a34a",
-  "#0ea5e9",
-  "#eab308",
-  "#f97316",
-  "#dc2626",
-  "#a855f7",
-  "#ec4899",
-  "#525252",
-];
+import { tagKindStyle } from "../lib/tagStyle";
 
 export default function SettingsScreen() {
   const { state, signOut } = useAuth();
@@ -80,8 +70,8 @@ export default function SettingsScreen() {
 }
 
 type TagEditor =
-  | { mode: "create"; name: string; color: string }
-  | { mode: "edit"; id: string; name: string; color: string };
+  | { mode: "create"; name: string }
+  | { mode: "edit"; id: string; name: string };
 
 function TagsSection({ token }: { token: string }) {
   const [tags, setTags] = useState<Tag[] | null>(null);
@@ -90,7 +80,7 @@ function TagsSection({ token }: { token: string }) {
 
   const reload = useCallback(async () => {
     const r = await listTags(token);
-    if (r.ok) setTags(r.data.tags);
+    if (r.ok) setTags(r.data.tags.filter((t) => t.kind === "custom"));
   }, [token]);
 
   useEffect(() => {
@@ -98,11 +88,11 @@ function TagsSection({ token }: { token: string }) {
   }, [reload]);
 
   function openCreate() {
-    setEditor({ mode: "create", name: "", color: TAG_COLORS[0]! });
+    setEditor({ mode: "create", name: "" });
   }
 
   function openEdit(tag: Tag) {
-    setEditor({ mode: "edit", id: tag.id, name: tag.name, color: tag.color });
+    setEditor({ mode: "edit", id: tag.id, name: tag.name });
   }
 
   async function save() {
@@ -115,8 +105,8 @@ function TagsSection({ token }: { token: string }) {
     setSaving(true);
     const r =
       editor.mode === "create"
-        ? await createTag(token, { name, color: editor.color })
-        : await updateTag(token, editor.id, { name, color: editor.color });
+        ? await createTag(token, { name })
+        : await updateTag(token, editor.id, { name });
     setSaving(false);
     if (!r.ok) {
       Alert.alert(
@@ -155,10 +145,10 @@ function TagsSection({ token }: { token: string }) {
     <View style={styles.section}>
       <View style={styles.tagsHeader}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.sectionTitle}>Tags</Text>
+          <Text style={styles.sectionTitle}>Custom Tags</Text>
           <Text style={styles.sectionHint}>
-            Plants can have any number of tags. Tap a tag to edit, or use the
-            trash icon to delete.
+            Free-form labels you can attach to plants. Location tags are managed
+            from the Map.
           </Text>
         </View>
         <Pressable
@@ -177,24 +167,28 @@ function TagsSection({ token }: { token: string }) {
       ) : tags.length === 0 ? (
         <Text style={styles.tagsEmpty}>No tags yet.</Text>
       ) : (
-        tags.map((t) => (
-          <View key={t.id} style={styles.tagRow}>
-            <Pressable style={styles.tagRowMain} onPress={() => openEdit(t)}>
-              <View style={[styles.tagBubble, { backgroundColor: t.color }]}>
-                <Text style={styles.tagBubbleText} numberOfLines={1}>
-                  {t.name}
-                </Text>
-              </View>
-            </Pressable>
-            <Pressable
-              onPress={() => confirmDelete(t)}
-              hitSlop={10}
-              accessibilityLabel={`Delete ${t.name}`}
-            >
-              <Ionicons name="trash-outline" size={20} color="#dc2626" />
-            </Pressable>
-          </View>
-        ))
+        tags.map((t) => {
+          const style = tagKindStyle(t.kind);
+          return (
+            <View key={t.id} style={styles.tagRow}>
+              <Pressable style={styles.tagRowMain} onPress={() => openEdit(t)}>
+                <View style={[styles.tagBubble, { backgroundColor: style.color }]}>
+                  <Ionicons name={style.icon} size={12} color="#fff" />
+                  <Text style={styles.tagBubbleText} numberOfLines={1}>
+                    {t.name}
+                  </Text>
+                </View>
+              </Pressable>
+              <Pressable
+                onPress={() => confirmDelete(t)}
+                hitSlop={10}
+                accessibilityLabel={`Delete ${t.name}`}
+              >
+                <Ionicons name="trash-outline" size={20} color="#dc2626" />
+              </Pressable>
+            </View>
+          );
+        })
       )}
 
       <Modal
@@ -210,7 +204,7 @@ function TagsSection({ token }: { token: string }) {
           >
             <Pressable style={styles.modalSheet} onPress={() => {}}>
               <Text style={styles.modalTitle}>
-                {editor.mode === "create" ? "New tag" : "Edit tag"}
+                {editor.mode === "create" ? "New custom tag" : "Edit custom tag"}
               </Text>
               <Text style={styles.modalLabel}>Name</Text>
               <TextInput
@@ -222,24 +216,14 @@ function TagsSection({ token }: { token: string }) {
                 placeholder="e.g. Rose"
                 autoFocus
               />
-              <Text style={styles.modalLabel}>Color</Text>
-              <View style={styles.swatchRow}>
-                {TAG_COLORS.map((c) => (
-                  <Pressable
-                    key={c}
-                    onPress={() =>
-                      setEditor((cur) => (cur ? { ...cur, color: c } : cur))
-                    }
-                    style={[
-                      styles.swatch,
-                      { backgroundColor: c },
-                      editor.color === c && styles.swatchActive,
-                    ]}
-                  />
-                ))}
-              </View>
               <Text style={styles.modalLabel}>Preview</Text>
-              <View style={[styles.tagBubble, { backgroundColor: editor.color, alignSelf: "flex-start" }]}>
+              <View
+                style={[
+                  styles.tagBubble,
+                  { backgroundColor: tagKindStyle("custom").color, alignSelf: "flex-start" },
+                ]}
+              >
+                <Ionicons name={tagKindStyle("custom").icon} size={12} color="#fff" />
                 <Text style={styles.tagBubbleText}>
                   {editor.name.trim() || "Tag name"}
                 </Text>
@@ -504,6 +488,9 @@ const styles = StyleSheet.create({
   },
   tagRowMain: { flex: 1 },
   tagBubble: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 999,
@@ -540,15 +527,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: "#171717",
   },
-  swatchRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  swatch: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    borderWidth: 2,
-    borderColor: "#fff",
-  },
-  swatchActive: { borderColor: "#171717" },
   modalButtons: {
     flexDirection: "row",
     justifyContent: "flex-end",

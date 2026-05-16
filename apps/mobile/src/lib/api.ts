@@ -29,7 +29,14 @@ export type PublicAction = {
   createdBy: { id: string; username: string };
 };
 
-export type Tag = { id: string; name: string; color: string };
+export type TagKind = "custom" | "location";
+
+export type Tag = {
+  id: string;
+  name: string;
+  kind: TagKind;
+  locationShapeId: string | null;
+};
 
 export type PublicPlant = {
   id: string;
@@ -42,7 +49,6 @@ export type PublicPlant = {
   gpsLat: number | null;
   gpsLng: number | null;
   plantNetData: unknown;
-  locationShapeId: string | null;
   coverPhoto: PublicPhoto | null;
   photos: PublicPhoto[];
   actions: PublicAction[];
@@ -121,7 +127,7 @@ export async function listTags(token: string) {
   return request<{ tags: Tag[] }>("/tags", { method: "GET", token });
 }
 
-export async function createTag(token: string, body: { name: string; color: string }) {
+export async function createTag(token: string, body: { name: string }) {
   return request<{ tag: Tag }>("/tags", {
     method: "POST",
     body: JSON.stringify(body),
@@ -132,7 +138,7 @@ export async function createTag(token: string, body: { name: string; color: stri
 export async function updateTag(
   token: string,
   id: string,
-  body: { name?: string; color?: string },
+  body: { name?: string },
 ) {
   return request<{ tag: Tag }>(`/tags/${id}`, {
     method: "PATCH",
@@ -285,7 +291,6 @@ export type PlantListItem = {
   species: string | null;
   gpsLat: number | null;
   gpsLng: number | null;
-  locationShapeId: string | null;
   coverPhotoThumbUrl: string | null;
 };
 

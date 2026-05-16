@@ -26,7 +26,14 @@ export type PublicAction = {
   createdBy: { id: string; username: string };
 };
 
-export type Tag = { id: string; name: string; color: string };
+export type TagKind = "custom" | "location";
+
+export type Tag = {
+  id: string;
+  name: string;
+  kind: TagKind;
+  locationShapeId: string | null;
+};
 
 export type PublicPlant = {
   id: string;
@@ -39,7 +46,6 @@ export type PublicPlant = {
   gpsLat: number | null;
   gpsLng: number | null;
   plantNetData: unknown;
-  locationShapeId: string | null;
   coverPhoto: PublicPhoto | null;
   photos: PublicPhoto[];
   actions: PublicAction[];
@@ -55,7 +61,6 @@ export type PlantListItem = {
   tags: Tag[];
   gpsLat: number | null;
   gpsLng: number | null;
-  locationShapeId: string | null;
   coverPhotoThumbUrl: string | null;
 };
 

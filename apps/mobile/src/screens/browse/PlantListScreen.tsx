@@ -13,18 +13,17 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import AuthImage from "../../components/AuthImage";
 import { useAuth } from "../../contexts/AuthContext";
 import {
-  listLocationShapes,
   listPlants,
-  type LocationShape,
   type PlantListItem,
+  type Tag,
 } from "../../lib/api";
-import { shapeIdsForPlant } from "../../lib/geometry";
-import type { BrowseStackParamList, PlantFilter } from "../../navigation/BrowseStackTypes";
+import { tagKindStyle } from "../../lib/tagStyle";
+import type { PlantFilter } from "../../navigation/BrowseStackTypes";
 import type { RootStackParamList } from "../../navigation/types";
+import ScreenHeader from "../../components/ScreenHeader";
 
-type StackNav = NativeStackNavigationProp<BrowseStackParamList, "PlantList">;
-type RootNav = NativeStackNavigationProp<RootStackParamList>;
-type Route = RouteProp<BrowseStackParamList, "PlantList">;
+type Nav = NativeStackNavigationProp<RootStackParamList, "PlantList">;
+type Route = RouteProp<RootStackParamList, "PlantList">;
 
 function iconForTags(tagNames: string[]): keyof typeof Ionicons.glyphMap {
   const joined = tagNames.join(" ").toLowerCase();
@@ -40,22 +39,19 @@ function iconForTags(tagNames: string[]): keyof typeof Ionicons.glyphMap {
   return "leaf-outline";
 }
 
-function matchesFilter(
-  p: PlantListItem,
-  f: PlantFilter,
-  shapes: LocationShape[],
-): boolean {
+function matchesFilter(p: PlantListItem, f: PlantFilter): boolean {
   switch (f.kind) {
     case "all":
       return true;
     case "tag": {
-      if (f.tagId == null) return p.tags.length === 0;
-      return p.tags.some((t) => t.id === f.tagId);
+      const customTags = p.tags.filter((t) => t.kind === "custom");
+      if (f.tagId == null) return customTags.length === 0;
+      return customTags.some((t) => t.id === f.tagId);
     }
     case "location": {
-      const ids = shapeIdsForPlant(p, shapes);
-      if (f.shapeId == null) return ids.size === 0;
-      return ids.has(f.shapeId);
+      const locTags = p.tags.filter((t) => t.kind === "location");
+      if (f.tagId == null) return locTags.length === 0;
+      return locTags.some((t) => t.id === f.tagId);
     }
     case "species": {
       const s = p.species?.trim() || null;
@@ -64,26 +60,37 @@ function matchesFilter(
   }
 }
 
+function TagChip({ tag, dense }: { tag: Tag; dense?: boolean }) {
+  const s = tagKindStyle(tag.kind);
+  return (
+    <View
+      style={[
+        dense ? styles.tagChipDense : styles.tagChip,
+        { backgroundColor: s.color },
+      ]}
+    >
+      <Ionicons name={s.icon} size={dense ? 10 : 12} color="#fff" />
+      <Text style={dense ? styles.tagChipDenseText : styles.tagChipText} numberOfLines={1}>
+        {tag.name}
+      </Text>
+    </View>
+  );
+}
+
 export default function PlantListScreen() {
-  const stackNav = useNavigation<StackNav>();
-  const rootNav = useNavigation<RootNav>();
+  const nav = useNavigation<Nav>();
   const route = useRoute<Route>();
   const { state } = useAuth();
   const token = state.status === "authed" ? state.token : null;
 
   const [plants, setPlants] = useState<PlantListItem[]>([]);
-  const [shapes, setShapes] = useState<LocationShape[]>([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<"tile" | "list">("tile");
 
   const reload = useCallback(async () => {
     if (!token) return;
-    const [pRes, sRes] = await Promise.all([
-      listPlants(token),
-      listLocationShapes(token),
-    ]);
+    const pRes = await listPlants(token);
     if (pRes.ok) setPlants(pRes.data.plants);
-    if (sRes.ok) setShapes(sRes.data.shapes);
   }, [token]);
 
   useEffect(() => {
@@ -101,10 +108,20 @@ export default function PlantListScreen() {
     }, [reload]),
   );
 
-  useEffect(() => {
-    stackNav.setOptions({
-      title: route.params.title,
-      headerRight: () => (
+  const filtered = useMemo(
+    () => plants.filter((p) => matchesFilter(p, route.params.filter)),
+    [plants, route.params.filter],
+  );
+
+  function open(plantId: string) {
+    nav.push("PlantDetail", { plantId });
+  }
+
+  const header = (
+    <ScreenHeader
+      title={route.params.title}
+      onBack={() => nav.goBack()}
+      right={
         <Pressable
           onPress={() => setView((v) => (v === "tile" ? "list" : "tile"))}
           hitSlop={12}
@@ -115,38 +132,37 @@ export default function PlantListScreen() {
             color="#171717"
           />
         </Pressable>
-      ),
-    });
-  }, [stackNav, route.params.title, view]);
-
-  const filtered = useMemo(
-    () => plants.filter((p) => matchesFilter(p, route.params.filter, shapes)),
-    [plants, shapes, route.params.filter],
+      }
+    />
   );
 
   if (loading) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator />
+      <View style={styles.root}>
+        {header}
+        <View style={styles.center}>
+          <ActivityIndicator />
+        </View>
       </View>
     );
   }
 
   if (filtered.length === 0) {
     return (
-      <View style={styles.center}>
-        <Text style={styles.empty}>No plants here yet.</Text>
+      <View style={styles.root}>
+        {header}
+        <View style={styles.center}>
+          <Text style={styles.empty}>No plants here yet.</Text>
+        </View>
       </View>
     );
   }
 
-  function open(plantId: string) {
-    rootNav.navigate("PlantDetail", { plantId });
-  }
-
   if (view === "list") {
     return (
-      <FlatList
+      <View style={styles.root}>
+        {header}
+        <FlatList
         style={styles.list}
         data={filtered}
         keyExtractor={(p) => p.id}
@@ -179,14 +195,7 @@ export default function PlantListScreen() {
               {item.tags.length > 0 ? (
                 <View style={styles.listTagRow}>
                   {item.tags.map((t) => (
-                    <View
-                      key={t.id}
-                      style={[styles.tagChip, { backgroundColor: t.color }]}
-                    >
-                      <Text style={styles.tagChipText} numberOfLines={1}>
-                        {t.name}
-                      </Text>
-                    </View>
+                    <TagChip key={t.id} tag={t} />
                   ))}
                 </View>
               ) : (
@@ -204,65 +213,64 @@ export default function PlantListScreen() {
           </Pressable>
         )}
       />
+      </View>
     );
   }
 
   return (
-    <FlatList
-      style={styles.list}
-      data={filtered}
-      key="tile-2col"
-      numColumns={2}
-      contentContainerStyle={styles.tileContent}
-      columnWrapperStyle={styles.tileRow}
-      keyExtractor={(p) => p.id}
-      renderItem={({ item }) => (
-        <Pressable
-          style={({ pressed }) => [styles.tile, pressed && { opacity: 0.7 }]}
-          onPress={() => open(item.id)}
-        >
-          <View style={styles.tileImageWrap}>
-            {item.coverPhotoThumbUrl ? (
-              <AuthImage
-                path={item.coverPhotoThumbUrl}
-                style={styles.tileImage}
-                resizeMode="cover"
-              />
-            ) : (
-              <Ionicons
-                name={iconForTags(item.tags.map((t) => t.name))}
-                size={48}
-                color="#16a34a"
-              />
-            )}
-          </View>
-          <Text style={styles.tileName} numberOfLines={1}>
-            {item.name?.trim() || item.qrCode}
-          </Text>
-          {item.tags.length > 0 ? (
-            <View style={styles.tileTagRow}>
-              {item.tags.slice(0, 3).map((t) => (
-                <View
-                  key={t.id}
-                  style={[styles.tagDot, { backgroundColor: t.color }]}
+    <View style={styles.root}>
+      {header}
+      <FlatList
+        style={styles.list}
+        data={filtered}
+        key="tile-2col"
+        numColumns={2}
+        contentContainerStyle={styles.tileContent}
+        columnWrapperStyle={styles.tileRow}
+        keyExtractor={(p) => p.id}
+        renderItem={({ item }) => (
+          <Pressable
+            style={({ pressed }) => [styles.tile, pressed && { opacity: 0.7 }]}
+            onPress={() => open(item.id)}
+          >
+            <View style={styles.tileImageWrap}>
+              {item.coverPhotoThumbUrl ? (
+                <AuthImage
+                  path={item.coverPhotoThumbUrl}
+                  style={styles.tileImage}
+                  resizeMode="cover"
                 />
-              ))}
-              <Text style={styles.tileType} numberOfLines={1}>
-                {item.tags.map((t) => t.name).join(", ")}
-              </Text>
+              ) : (
+                <Ionicons
+                  name={iconForTags(item.tags.map((t) => t.name))}
+                  size={48}
+                  color="#16a34a"
+                />
+              )}
             </View>
-          ) : (
-            <Text style={styles.tileType} numberOfLines={1}>
-              {item.name?.trim() ? item.qrCode : ""}
+            <Text style={styles.tileName} numberOfLines={1}>
+              {item.name?.trim() || item.qrCode}
             </Text>
-          )}
-        </Pressable>
-      )}
-    />
+            {item.tags.length > 0 ? (
+              <View style={styles.tileTagRow}>
+                {item.tags.slice(0, 3).map((t) => (
+                  <TagChip key={t.id} tag={t} dense />
+                ))}
+              </View>
+            ) : (
+              <Text style={styles.tileType} numberOfLines={1}>
+                {item.name?.trim() ? item.qrCode : ""}
+              </Text>
+            )}
+          </Pressable>
+        )}
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: "#fff" },
   list: { flex: 1, backgroundColor: "#fff" },
   center: {
     flex: 1,
@@ -301,21 +309,30 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   tagChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 999,
   },
   tagChipText: { color: "#fff", fontSize: 11, fontWeight: "500" },
+  tagChipDense: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 999,
+  },
+  tagChipDenseText: { color: "#fff", fontSize: 10, fontWeight: "500" },
   tileTagRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
+    flexWrap: "wrap",
+    gap: 3,
     paddingHorizontal: 8,
-  },
-  tagDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    paddingTop: 2,
   },
 
   tileContent: { padding: 12, gap: 12 },
