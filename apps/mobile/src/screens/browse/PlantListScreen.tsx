@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
+  Modal,
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
+  TouchableOpacity,
   View,
 } from "react-native";
 import { useFocusEffect, useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
@@ -14,6 +18,8 @@ import AuthImage from "../../components/AuthImage";
 import { useAuth } from "../../contexts/AuthContext";
 import {
   listPlants,
+  recordAction,
+  type ActionKind,
   type PlantListItem,
   type Tag,
 } from "../../lib/api";
@@ -24,6 +30,13 @@ import ScreenHeader from "../../components/ScreenHeader";
 
 type Nav = NativeStackNavigationProp<RootStackParamList, "PlantList">;
 type Route = RouteProp<RootStackParamList, "PlantList">;
+
+const MENU_ACTIONS: { kind: ActionKind; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+  { kind: "feeding", label: "Feed", icon: "nutrition-outline" },
+  { kind: "watering", label: "Water", icon: "water-outline" },
+  { kind: "fertilizing", label: "Fertilize", icon: "flask-outline" },
+  { kind: "treating", label: "Treat", icon: "medkit-outline" },
+];
 
 function iconForTags(tagNames: string[]): keyof typeof Ionicons.glyphMap {
   const joined = tagNames.join(" ").toLowerCase();
@@ -101,6 +114,19 @@ export default function PlantListScreen() {
   const [plants, setPlants] = useState<PlantListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<"tile" | "list">("tile");
+  const [menuAnchor, setMenuAnchor] = useState<{ top: number; right: number } | null>(null);
+  const ellipsisRef = useRef<View>(null);
+  const [actionInput, setActionInput] = useState<
+    { kind: ActionKind; label: string; notes: string } | null
+  >(null);
+  const [applying, setApplying] = useState(false);
+
+  function openMenu() {
+    ellipsisRef.current?.measureInWindow((x, y, w, h) => {
+      setMenuAnchor({ top: y + h + 4, right: 12 });
+    });
+  }
+  const closeMenu = () => setMenuAnchor(null);
 
   const reload = useCallback(async () => {
     if (!token) return;
@@ -132,6 +158,25 @@ export default function PlantListScreen() {
     nav.push("PlantDetail", { plantId });
   }
 
+  async function submitBulkAction() {
+    if (!token || !actionInput) return;
+    const notes = actionInput.notes.trim() || undefined;
+    const targets = filtered;
+    setApplying(true);
+    const results = await Promise.all(
+      targets.map((p) => recordAction(token, p.id, { kind: actionInput.kind, notes })),
+    );
+    setApplying(false);
+    const failed = results.filter((r) => !r.ok).length;
+    setActionInput(null);
+    if (failed > 0) {
+      Alert.alert(
+        "Some actions failed",
+        `${targets.length - failed} of ${targets.length} ${actionInput.label.toLowerCase()} records saved.`,
+      );
+    }
+  }
+
   const headerIcon = headerIconForFilter(route.params.filter);
   const header = (
     <ScreenHeader
@@ -140,18 +185,111 @@ export default function PlantListScreen() {
       iconColor={headerIcon.color}
       onBack={() => nav.goBack()}
       right={
-        <Pressable
-          onPress={() => setView((v) => (v === "tile" ? "list" : "tile"))}
-          hitSlop={12}
-        >
-          <Ionicons
-            name={view === "tile" ? "list-outline" : "grid-outline"}
-            size={22}
-            color="#171717"
-          />
+        <Pressable ref={ellipsisRef} onPress={openMenu} hitSlop={12}>
+          <Ionicons name="ellipsis-horizontal" size={24} color="#171717" />
         </Pressable>
       }
     />
+  );
+
+  const menu = (
+    <Modal
+      visible={menuAnchor !== null}
+      transparent
+      animationType="fade"
+      onRequestClose={closeMenu}
+    >
+      <Pressable style={styles.menuBackdrop} onPress={closeMenu}>
+        {menuAnchor ? (
+          <View
+            style={[styles.menu, { top: menuAnchor.top, right: menuAnchor.right }]}
+          >
+            {MENU_ACTIONS.map(({ kind, label, icon }) => (
+              <Pressable
+                key={kind}
+                style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
+                onPress={() => {
+                  closeMenu();
+                  setActionInput({ kind, label, notes: "" });
+                }}
+              >
+                <Ionicons name={icon} size={18} color="#171717" />
+                <Text style={styles.menuItemText}>{label}</Text>
+              </Pressable>
+            ))}
+            <View style={styles.menuSeparator} />
+            <Pressable
+              style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
+              onPress={() => {
+                setView((v) => (v === "tile" ? "list" : "tile"));
+                closeMenu();
+              }}
+            >
+              <Ionicons
+                name={view === "tile" ? "list-outline" : "grid-outline"}
+                size={18}
+                color="#171717"
+              />
+              <Text style={styles.menuItemText}>
+                {view === "tile" ? "List view" : "Tile view"}
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
+      </Pressable>
+    </Modal>
+  );
+
+  const actionModal = (
+    <Modal
+      transparent
+      visible={actionInput !== null}
+      animationType="fade"
+      onRequestClose={() => !applying && setActionInput(null)}
+    >
+      {actionInput && (
+        <Pressable
+          style={styles.modalBackdrop}
+          onPress={() => !applying && setActionInput(null)}
+        >
+          <Pressable style={styles.modalSheet} onPress={() => {}}>
+            <Text style={styles.modalTitle}>
+              {actionInput.label} {filtered.length} plant{filtered.length === 1 ? "" : "s"}
+            </Text>
+            <TextInput
+              style={styles.notesInput}
+              placeholder="Notes (optional)"
+              multiline
+              editable={!applying}
+              value={actionInput.notes}
+              onChangeText={(t) =>
+                setActionInput((cur) => (cur ? { ...cur, notes: t } : cur))
+              }
+            />
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                onPress={() => setActionInput(null)}
+                disabled={applying}
+                style={styles.modalCancel}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={submitBulkAction}
+                disabled={applying}
+                style={[styles.modalSave, applying && styles.modalSaveDisabled]}
+              >
+                {applying ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.modalSaveText}>Save</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      )}
+    </Modal>
   );
 
   if (loading) {
@@ -161,6 +299,8 @@ export default function PlantListScreen() {
         <View style={styles.center}>
           <ActivityIndicator />
         </View>
+        {menu}
+        {actionModal}
       </View>
     );
   }
@@ -172,6 +312,8 @@ export default function PlantListScreen() {
         <View style={styles.center}>
           <Text style={styles.empty}>No plants here yet.</Text>
         </View>
+        {menu}
+        {actionModal}
       </View>
     );
   }
@@ -231,6 +373,8 @@ export default function PlantListScreen() {
           </Pressable>
         )}
       />
+        {menu}
+        {actionModal}
       </View>
     );
   }
@@ -283,6 +427,8 @@ export default function PlantListScreen() {
           </Pressable>
         )}
       />
+      {menu}
+      {actionModal}
     </View>
   );
 }
@@ -297,6 +443,76 @@ const styles = StyleSheet.create({
     backgroundColor: "#fafafa",
   },
   empty: { color: "#737373" },
+
+  menuBackdrop: { flex: 1 },
+  menu: {
+    position: "absolute",
+    minWidth: 180,
+    backgroundColor: "#fff",
+    borderRadius: 10,
+    paddingVertical: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#e5e5e5",
+    shadowColor: "#000",
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  menuItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  menuItemPressed: { backgroundColor: "#f5f5f5" },
+  menuItemText: { fontSize: 15, color: "#171717" },
+  menuSeparator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "#e5e5e5",
+    marginVertical: 4,
+  },
+
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    padding: 24,
+  },
+  modalSheet: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 16,
+  },
+  modalTitle: { fontSize: 18, fontWeight: "600", marginBottom: 12 },
+  notesInput: {
+    borderWidth: 1,
+    borderColor: "#d4d4d4",
+    borderRadius: 6,
+    padding: 10,
+    minHeight: 80,
+    textAlignVertical: "top",
+    fontSize: 15,
+  },
+  modalButtons: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    marginTop: 12,
+    gap: 8,
+  },
+  modalCancel: { paddingVertical: 8, paddingHorizontal: 14 },
+  modalCancelText: { color: "#525252", fontSize: 15 },
+  modalSave: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    backgroundColor: "#171717",
+    borderRadius: 6,
+    minWidth: 60,
+    alignItems: "center",
+  },
+  modalSaveDisabled: { opacity: 0.6 },
+  modalSaveText: { color: "#fff", fontSize: 15, fontWeight: "500" },
 
   listRow: {
     paddingHorizontal: 16,
