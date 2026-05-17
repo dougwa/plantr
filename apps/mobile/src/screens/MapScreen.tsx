@@ -28,7 +28,7 @@ import MapView, {
 import * as Location from "expo-location";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useFocusEffect, useNavigation } from "@react-navigation/native";
+import { useFocusEffect, useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useAuth } from "../contexts/AuthContext";
 import { loadViewport, saveViewport } from "../lib/storage";
@@ -276,6 +276,13 @@ type SubModal =
 
 export default function MapScreen() {
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const route = useRoute<RouteProp<RootStackParamList, "Map">>();
+  const focusShapeId = route.params?.focusShapeId ?? null;
+  const highlightPlantIds = route.params?.highlightPlantIds;
+  const highlightSet = useMemo(
+    () => new Set(highlightPlantIds ?? []),
+    [highlightPlantIds],
+  );
   const { state } = useAuth();
   const mapRef = useRef<MapView>(null);
   const [plants, setPlants] = useState<PlantListItem[]>([]);
@@ -411,6 +418,65 @@ export default function MapScreen() {
     }
     lastFitCountRef.current = count;
   }, [loading, plantsWithGps, shapes]);
+
+  // "View on Map" framing — when route params request a focus shape or a set
+  // of highlighted plants, animate the camera to fit them. Apply once per
+  // params change; we wait until the relevant data is loaded before framing
+  // so the target actually exists.
+  const framedSigRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (loading || !mapRef.current) return;
+    if (!focusShapeId && (!highlightPlantIds || highlightPlantIds.length === 0)) {
+      framedSigRef.current = null;
+      return;
+    }
+    const targetShape = focusShapeId
+      ? shapes.find((s) => s.id === focusShapeId) ?? null
+      : null;
+    if (focusShapeId && !targetShape) return;
+
+    const sig = `${focusShapeId ?? ""}|${(highlightPlantIds ?? []).join(",")}`;
+    if (framedSigRef.current === sig) return;
+
+    let coords: LatLng[] = [];
+    if (targetShape) {
+      if (targetShape.kind === "polygon" && targetShape.polygonPoints?.length) {
+        coords = targetShape.polygonPoints.map((p) => ({
+          latitude: p.lat,
+          longitude: p.lng,
+        }));
+      } else if (targetShape.kind === "ellipse") {
+        coords = ellipsePoints(targetShape);
+      } else {
+        coords = rectangleCorners(targetShape);
+      }
+    } else if (highlightPlantIds && highlightPlantIds.length > 0) {
+      coords = plants
+        .filter(
+          (p) =>
+            highlightSet.has(p.id) && p.gpsLat != null && p.gpsLng != null,
+        )
+        .map((p) => ({
+          latitude: p.gpsLat as number,
+          longitude: p.gpsLng as number,
+        }));
+      if (coords.length === 0) return;
+    }
+
+    if (coords.length === 0) return;
+    framedSigRef.current = sig;
+    hasSavedViewRef.current = true;
+
+    if (coords.length === 1) {
+      const region = fitRegion(coords);
+      if (region) mapRef.current.animateToRegion(region, 400);
+    } else {
+      mapRef.current.fitToCoordinates(coords, {
+        edgePadding: { top: 100, right: 80, bottom: 100, left: 80 },
+        animated: true,
+      });
+    }
+  }, [loading, focusShapeId, highlightPlantIds, highlightSet, shapes, plants]);
 
   function chooseShapeKind(): Promise<
     "rectangle" | "ellipse" | "property" | "polygon" | null
@@ -1003,21 +1069,43 @@ export default function MapScreen() {
             </Marker>
             );
           })}
-        {plantsWithGps.map((p) => (
-          <Marker
-            key={p.id}
-            coordinate={{
-              latitude: p.gpsLat as number,
-              longitude: p.gpsLng as number,
-            }}
-            onPress={() => onMarkerPress(p)}
-            anchor={{ x: 0.5, y: 0.5 }}
-          >
-            <View style={styles.dotOuter}>
-              <View style={styles.dotInner} />
-            </View>
-          </Marker>
-        ))}
+        {plantsWithGps.map((p) => {
+          const isHighlighted = highlightSet.has(p.id);
+          const hasHighlights = highlightSet.size > 0;
+          const isDimmed = hasHighlights && !isHighlighted;
+          return (
+            <Marker
+              key={`${p.id}-${isHighlighted ? "hl" : isDimmed ? "dim" : "n"}`}
+              coordinate={{
+                latitude: p.gpsLat as number,
+                longitude: p.gpsLng as number,
+              }}
+              onPress={() => onMarkerPress(p)}
+              anchor={{ x: 0.5, y: 0.5 }}
+              zIndex={isHighlighted ? 2 : isDimmed ? 0 : 1}
+            >
+              <View
+                style={
+                  isHighlighted
+                    ? styles.dotOuterHighlight
+                    : isDimmed
+                      ? styles.dotOuterDim
+                      : styles.dotOuter
+                }
+              >
+                <View
+                  style={
+                    isHighlighted
+                      ? styles.dotInnerHighlight
+                      : isDimmed
+                        ? styles.dotInnerDim
+                        : styles.dotInner
+                  }
+                />
+              </View>
+            </Marker>
+          );
+        })}
 
         {editing && editing.kind === "polygon"
           ? <PolygonEditOverlay
@@ -1081,6 +1169,20 @@ export default function MapScreen() {
           <Ionicons name="add" size={28} color="#fff" />
         </Pressable>
       </SafeAreaView>
+
+      {nav.canGoBack() && (
+        <SafeAreaView style={styles.backSafe} edges={["top"]} pointerEvents="box-none">
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+            onPress={() => nav.goBack()}
+            style={styles.backButton}
+            hitSlop={8}
+          >
+            <Ionicons name="chevron-back" size={22} color="#171717" />
+          </Pressable>
+        </SafeAreaView>
+      )}
 
       <SafeAreaView style={styles.helpSafe} edges={["top"]} pointerEvents="box-none">
         <View style={styles.helpPill}>
@@ -1779,6 +1881,26 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   dotInner: { width: 10, height: 10, borderRadius: 5, backgroundColor: "#16a34a" },
+  dotOuterHighlight: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: "#fff",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "#f59e0b",
+  },
+  dotInnerHighlight: { width: 14, height: 14, borderRadius: 7, backgroundColor: "#f59e0b" },
+  dotOuterDim: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: "rgba(255,255,255,0.55)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  dotInnerDim: { width: 8, height: 8, borderRadius: 4, backgroundColor: "rgba(82,82,82,0.7)" },
 
   hitLarge: {
     width: 56,
@@ -1887,8 +2009,31 @@ const styles = StyleSheet.create({
     right: 0,
     alignItems: "center",
   },
+  backSafe: {
+    position: "absolute",
+    top: 0,
+    left: 12,
+  },
+  backButton: {
+    marginTop: 8,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#fff",
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#e5e5e5",
+  },
   helpPill: {
     marginTop: 8,
+    marginLeft: 58,
+    marginRight: 58,
     paddingHorizontal: 14,
     paddingVertical: 6,
     borderRadius: 999,

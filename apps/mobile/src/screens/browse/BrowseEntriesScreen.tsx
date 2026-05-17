@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -7,7 +7,7 @@ import {
   Text,
   View,
 } from "react-native";
-import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
+import { useFocusEffect, useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useAuth } from "../../contexts/AuthContext";
@@ -52,16 +52,27 @@ export default function BrowseEntriesScreen() {
 
   const title = CATEGORY_TITLES[route.params.category] ?? "Browse";
 
-  useEffect(() => {
+  const reload = useCallback(async () => {
     if (!token) return;
+    const [pRes, tRes] = await Promise.all([listPlants(token), listTags(token)]);
+    if (pRes.ok) setPlants(pRes.data.plants);
+    if (tRes.ok) setTags(tRes.data.tags);
+  }, [token]);
+
+  useEffect(() => {
     (async () => {
       setLoading(true);
-      const [pRes, tRes] = await Promise.all([listPlants(token), listTags(token)]);
-      if (pRes.ok) setPlants(pRes.data.plants);
-      if (tRes.ok) setTags(tRes.data.tags);
+      await reload();
       setLoading(false);
     })();
-  }, [token]);
+  }, [reload]);
+
+  // Refresh on focus so entities deleted in PlantList disappear here.
+  useFocusEffect(
+    useCallback(() => {
+      reload();
+    }, [reload]),
+  );
 
   const entries: Entry[] = useMemo(() => {
     const cat = route.params.category;

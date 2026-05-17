@@ -17,7 +17,11 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import AuthImage from "../../components/AuthImage";
 import { useAuth } from "../../contexts/AuthContext";
 import {
+  deleteLocationShape,
+  deletePlant,
+  deleteTag,
   listPlants,
+  listTags,
   recordAction,
   type ActionKind,
   type PlantListItem,
@@ -112,6 +116,7 @@ export default function PlantListScreen() {
   const token = state.status === "authed" ? state.token : null;
 
   const [plants, setPlants] = useState<PlantListItem[]>([]);
+  const [tags, setTags] = useState<Tag[]>([]);
   const [loading, setLoading] = useState(true);
   const [view, setView] = useState<"tile" | "list">("tile");
   const [menuAnchor, setMenuAnchor] = useState<{ top: number; right: number } | null>(null);
@@ -120,6 +125,12 @@ export default function PlantListScreen() {
     { kind: ActionKind; label: string; notes: string } | null
   >(null);
   const [applying, setApplying] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<
+    | { kind: "entity"; entityKind: "location" | "tag"; label: string }
+    | { kind: "all"; count: number }
+    | null
+  >(null);
+  const [deleting, setDeleting] = useState(false);
 
   function openMenu() {
     ellipsisRef.current?.measureInWindow((x, y, w, h) => {
@@ -130,8 +141,9 @@ export default function PlantListScreen() {
 
   const reload = useCallback(async () => {
     if (!token) return;
-    const pRes = await listPlants(token);
+    const [pRes, tRes] = await Promise.all([listPlants(token), listTags(token)]);
     if (pRes.ok) setPlants(pRes.data.plants);
+    if (tRes.ok) setTags(tRes.data.tags);
   }, [token]);
 
   useEffect(() => {
@@ -156,6 +168,85 @@ export default function PlantListScreen() {
 
   function open(plantId: string) {
     nav.push("PlantDetail", { plantId });
+  }
+
+  // For a location-filter list, find the underlying location shape so we can
+  // focus the map on it (and delete it if requested). We look it up from the
+  // tags list rather than scanning filtered plants so it's available even
+  // when the list is empty.
+  const filterLocationShapeId = useMemo<string | null>(() => {
+    const f = route.params.filter;
+    if (f.kind !== "location" || !f.tagId) return null;
+    const t = tags.find((t) => t.id === f.tagId && t.kind === "location");
+    return t?.locationShapeId ?? null;
+  }, [route.params.filter, tags]);
+
+  function viewOnMap() {
+    closeMenu();
+    const highlightPlantIds = filtered.map((p) => p.id);
+    nav.navigate("Map", {
+      highlightPlantIds,
+      focusShapeId: filterLocationShapeId,
+    });
+  }
+
+  const hasMapTargets = useMemo(
+    () =>
+      filterLocationShapeId != null ||
+      filtered.some((p) => p.gpsLat != null && p.gpsLng != null),
+    [filtered, filterLocationShapeId],
+  );
+
+  type EntityTarget =
+    | { kind: "location"; shapeId: string; label: string }
+    | { kind: "tag"; tagId: string; label: string };
+
+  const entityToDelete = useMemo<EntityTarget | null>(() => {
+    const f = route.params.filter;
+    if (f.kind === "location" && filterLocationShapeId) {
+      return { kind: "location", shapeId: filterLocationShapeId, label: f.label };
+    }
+    if (f.kind === "tag" && f.tagId) {
+      return { kind: "tag", tagId: f.tagId, label: f.label };
+    }
+    return null;
+  }, [route.params.filter, filterLocationShapeId]);
+
+  async function performDeleteEntity() {
+    if (!token || !entityToDelete) return;
+    setDeleting(true);
+    const r =
+      entityToDelete.kind === "location"
+        ? await deleteLocationShape(token, entityToDelete.shapeId)
+        : await deleteTag(token, entityToDelete.tagId);
+    setDeleting(false);
+    setDeleteConfirm(null);
+    if (!r.ok) {
+      Alert.alert("Delete failed", r.error);
+      return;
+    }
+    nav.goBack();
+  }
+
+  async function performDeleteAllPlants() {
+    if (!token) return;
+    const targets = filtered;
+    setDeleting(true);
+    const results = await Promise.all(
+      targets.map((p) => deletePlant(token, p.id)),
+    );
+    setDeleting(false);
+    setDeleteConfirm(null);
+    const failed = results.filter((r) => !r.ok).length;
+    if (failed > 0) {
+      Alert.alert(
+        "Some deletions failed",
+        `Deleted ${targets.length - failed} of ${targets.length} plants.`,
+      );
+      await reload();
+      return;
+    }
+    nav.goBack();
   }
 
   async function submitBulkAction() {
@@ -218,6 +309,15 @@ export default function PlantListScreen() {
               </Pressable>
             ))}
             <View style={styles.menuSeparator} />
+            {hasMapTargets && (
+              <Pressable
+                style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
+                onPress={viewOnMap}
+              >
+                <Ionicons name="map-outline" size={18} color="#171717" />
+                <Text style={styles.menuItemText}>View on Map</Text>
+              </Pressable>
+            )}
             <Pressable
               style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
               onPress={() => {
@@ -234,9 +334,101 @@ export default function PlantListScreen() {
                 {view === "tile" ? "List view" : "Tile view"}
               </Text>
             </Pressable>
+            {(entityToDelete || filtered.length > 0) && (
+              <View style={styles.menuSeparator} />
+            )}
+            {entityToDelete && (
+              <Pressable
+                style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
+                onPress={() => {
+                  closeMenu();
+                  setDeleteConfirm({
+                    kind: "entity",
+                    entityKind: entityToDelete.kind,
+                    label: entityToDelete.label,
+                  });
+                }}
+              >
+                <Ionicons name="trash-outline" size={18} color="#dc2626" />
+                <Text style={[styles.menuItemText, styles.menuItemDanger]}>
+                  Delete {entityToDelete.kind === "location" ? "Location" : "Tag"}
+                </Text>
+              </Pressable>
+            )}
+            {filtered.length > 0 && (
+              <Pressable
+                style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
+                onPress={() => {
+                  closeMenu();
+                  setDeleteConfirm({ kind: "all", count: filtered.length });
+                }}
+              >
+                <Ionicons name="trash-outline" size={18} color="#dc2626" />
+                <Text style={[styles.menuItemText, styles.menuItemDanger]}>
+                  Delete all Plants
+                </Text>
+              </Pressable>
+            )}
           </View>
         ) : null}
       </Pressable>
+    </Modal>
+  );
+
+  const deleteModal = (
+    <Modal
+      transparent
+      visible={deleteConfirm !== null}
+      animationType="fade"
+      onRequestClose={() => !deleting && setDeleteConfirm(null)}
+    >
+      {deleteConfirm && (
+        <Pressable
+          style={styles.modalBackdrop}
+          onPress={() => !deleting && setDeleteConfirm(null)}
+        >
+          <Pressable style={styles.modalSheet} onPress={() => {}}>
+            <Text style={styles.modalTitle}>
+              {deleteConfirm.kind === "all"
+                ? `Delete ${deleteConfirm.count} plant${deleteConfirm.count === 1 ? "" : "s"}?`
+                : deleteConfirm.entityKind === "location"
+                  ? `Delete location "${deleteConfirm.label}"?`
+                  : `Delete tag "${deleteConfirm.label}"?`}
+            </Text>
+            <Text style={styles.modalBody}>
+              {deleteConfirm.kind === "all"
+                ? "This permanently deletes the plants and their photos. It cannot be undone."
+                : deleteConfirm.entityKind === "location"
+                  ? "The location shape will be removed from the map and the location tag will be cleared from all plants."
+                  : "The tag will be removed from settings and cleared from all plants."}
+            </Text>
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                onPress={() => setDeleteConfirm(null)}
+                disabled={deleting}
+                style={styles.modalCancel}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={
+                  deleteConfirm.kind === "all"
+                    ? performDeleteAllPlants
+                    : performDeleteEntity
+                }
+                disabled={deleting}
+                style={[styles.modalDelete, deleting && styles.modalSaveDisabled]}
+              >
+                {deleting ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.modalDeleteText}>Delete</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      )}
     </Modal>
   );
 
@@ -301,6 +493,7 @@ export default function PlantListScreen() {
         </View>
         {menu}
         {actionModal}
+        {deleteModal}
       </View>
     );
   }
@@ -314,6 +507,7 @@ export default function PlantListScreen() {
         </View>
         {menu}
         {actionModal}
+        {deleteModal}
       </View>
     );
   }
@@ -375,6 +569,7 @@ export default function PlantListScreen() {
       />
         {menu}
         {actionModal}
+        {deleteModal}
       </View>
     );
   }
@@ -429,6 +624,7 @@ export default function PlantListScreen() {
       />
       {menu}
       {actionModal}
+      {deleteModal}
     </View>
   );
 }
@@ -468,6 +664,7 @@ const styles = StyleSheet.create({
   },
   menuItemPressed: { backgroundColor: "#f5f5f5" },
   menuItemText: { fontSize: 15, color: "#171717" },
+  menuItemDanger: { color: "#dc2626" },
   menuSeparator: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: "#e5e5e5",
@@ -486,6 +683,7 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   modalTitle: { fontSize: 18, fontWeight: "600", marginBottom: 12 },
+  modalBody: { fontSize: 14, color: "#525252", lineHeight: 20, marginBottom: 4 },
   notesInput: {
     borderWidth: 1,
     borderColor: "#d4d4d4",
@@ -513,6 +711,15 @@ const styles = StyleSheet.create({
   },
   modalSaveDisabled: { opacity: 0.6 },
   modalSaveText: { color: "#fff", fontSize: 15, fontWeight: "500" },
+  modalDelete: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    backgroundColor: "#dc2626",
+    borderRadius: 6,
+    minWidth: 60,
+    alignItems: "center",
+  },
+  modalDeleteText: { color: "#fff", fontSize: 15, fontWeight: "500" },
 
   listRow: {
     paddingHorizontal: 16,

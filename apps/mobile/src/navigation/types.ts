@@ -1,7 +1,7 @@
 import type { BrowseCategory, PlantFilter } from "./BrowseStackTypes";
 
 export type RootStackParamList = {
-  Map: undefined;
+  Map: { highlightPlantIds?: string[]; focusShapeId?: string | null } | undefined;
   Browse: undefined;
   Reports: undefined;
   Settings: undefined;

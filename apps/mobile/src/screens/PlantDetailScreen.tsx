@@ -77,6 +77,10 @@ export default function PlantDetailScreen() {
     | { mode: "edit"; actionId: string; label: string; notes: string }
     | null
   >(null);
+  const [menuAnchor, setMenuAnchor] = useState<{ top: number; right: number } | null>(null);
+  const ellipsisRef = useRef<View>(null);
+  const [confirmInput, setConfirmInput] = useState<"delete" | "reset" | null>(null);
+  const [applying, setApplying] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const { width: winW, height: winH } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -316,69 +320,44 @@ export default function PlantDetailScreen() {
     });
   }
 
-  function openPlantMenu() {
+  function openMenu() {
+    ellipsisRef.current?.measureInWindow((x, y, w, h) => {
+      setMenuAnchor({ top: y + h + 4, right: 12 });
+    });
+  }
+  const closeMenu = () => setMenuAnchor(null);
+
+  function viewOnMap() {
     if (!plant) return;
-    const code = plant.qrCode;
-    const onReset = () =>
-      Alert.alert(
-        "Reset plant?",
-        `All photos, actions, name, type, GPS, and notes for ${code} will be erased. The QR code stays available for a new plant. This cannot be undone.`,
-        [
-          { text: "Cancel", style: "cancel" },
-          { text: "Reset", style: "destructive", onPress: doReset },
-        ],
-      );
-    const onDelete = () =>
-      Alert.alert(
-        "Delete plant?",
-        `${code} will be permanently removed along with its photos and actions. The QR code can be scanned again to create a fresh entry. This cannot be undone.`,
-        [
-          { text: "Cancel", style: "cancel" },
-          { text: "Delete", style: "destructive", onPress: doDelete },
-        ],
-      );
+    closeMenu();
+    nav.navigate("Map", { highlightPlantIds: [plant.id], focusShapeId: null });
+  }
 
-    if (Platform.OS === "ios") {
-      ActionSheetIOS.showActionSheetWithOptions(
-        {
-          options: ["Cancel", "Reset plant", "Delete plant"],
-          cancelButtonIndex: 0,
-          destructiveButtonIndex: 2,
-          title: code,
-        },
-        (i) => {
-          if (i === 1) onReset();
-          else if (i === 2) onDelete();
-        },
-      );
+  async function submitConfirm() {
+    if (!token || !plant || !confirmInput) return;
+    setApplying(true);
+    if (confirmInput === "delete") {
+      const r = await deletePlant(token, plant.id);
+      setApplying(false);
+      setConfirmInput(null);
+      if (!r.ok) {
+        Alert.alert("Delete failed", r.error);
+        return;
+      }
+      nav.goBack();
     } else {
-      Alert.alert(code, undefined, [
-        { text: "Cancel", style: "cancel" },
-        { text: "Reset plant", onPress: onReset },
-        { text: "Delete plant", style: "destructive", onPress: onDelete },
-      ]);
+      const r = await resetPlant(token, plant.id);
+      setApplying(false);
+      setConfirmInput(null);
+      if (!r.ok) {
+        Alert.alert("Reset failed", r.error);
+        return;
+      }
+      setPlant(r.data.plant);
     }
   }
 
-  async function doReset() {
-    if (!token || !plant) return;
-    const r = await resetPlant(token, plant.id);
-    if (!r.ok) {
-      Alert.alert("Reset failed", r.error);
-      return;
-    }
-    setPlant(r.data.plant);
-  }
-
-  async function doDelete() {
-    if (!token || !plant) return;
-    const r = await deletePlant(token, plant.id);
-    if (!r.ok) {
-      Alert.alert("Delete failed", r.error);
-      return;
-    }
-    nav.goBack();
-  }
+  const hasGps = !!plant && plant.gpsLat != null && plant.gpsLng != null;
 
   function openTagBrowse(tag: Tag) {
     const filter: PlantFilter =
@@ -402,7 +381,7 @@ export default function PlantDetailScreen() {
         title={plant.qrCode}
         onBack={() => nav.goBack()}
         right={
-          <Pressable onPress={openPlantMenu} hitSlop={12}>
+          <Pressable ref={ellipsisRef} onPress={openMenu} hitSlop={12}>
             <Ionicons name="ellipsis-horizontal" size={24} color="#171717" />
           </Pressable>
         }
@@ -669,6 +648,115 @@ export default function PlantDetailScreen() {
                 </TouchableOpacity>
                 <TouchableOpacity onPress={submitAction} style={styles.modalSave}>
                   <Text style={styles.modalSaveText}>Save</Text>
+                </TouchableOpacity>
+              </View>
+            </Pressable>
+          </Pressable>
+        )}
+      </Modal>
+
+      <Modal
+        visible={menuAnchor !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={closeMenu}
+      >
+        <Pressable style={styles.menuBackdrop} onPress={closeMenu}>
+          {menuAnchor ? (
+            <View style={[styles.menu, { top: menuAnchor.top, right: menuAnchor.right }]}>
+              {ACTION_KINDS.map(({ kind, label, icon }) => (
+                <Pressable
+                  key={kind}
+                  style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
+                  onPress={() => {
+                    closeMenu();
+                    setActionInput({ mode: "create", kind, label, notes: "" });
+                  }}
+                >
+                  <Ionicons name={icon} size={18} color="#171717" />
+                  <Text style={styles.menuItemText}>{label}</Text>
+                </Pressable>
+              ))}
+              {hasGps && (
+                <>
+                  <View style={styles.menuSeparator} />
+                  <Pressable
+                    style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
+                    onPress={viewOnMap}
+                  >
+                    <Ionicons name="map-outline" size={18} color="#171717" />
+                    <Text style={styles.menuItemText}>View on Map</Text>
+                  </Pressable>
+                </>
+              )}
+              <View style={styles.menuSeparator} />
+              <Pressable
+                style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
+                onPress={() => {
+                  closeMenu();
+                  setConfirmInput("delete");
+                }}
+              >
+                <Ionicons name="trash-outline" size={18} color="#dc2626" />
+                <Text style={[styles.menuItemText, styles.menuItemDanger]}>Delete Plant</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [styles.menuItem, pressed && styles.menuItemPressed]}
+                onPress={() => {
+                  closeMenu();
+                  setConfirmInput("reset");
+                }}
+              >
+                <Ionicons name="refresh-outline" size={18} color="#dc2626" />
+                <Text style={[styles.menuItemText, styles.menuItemDanger]}>Reset Plant</Text>
+              </Pressable>
+            </View>
+          ) : null}
+        </Pressable>
+      </Modal>
+
+      <Modal
+        transparent
+        visible={confirmInput !== null}
+        animationType="fade"
+        onRequestClose={() => !applying && setConfirmInput(null)}
+      >
+        {confirmInput && (
+          <Pressable
+            style={styles.modalBackdrop}
+            onPress={() => !applying && setConfirmInput(null)}
+          >
+            <Pressable style={styles.modalSheet} onPress={() => {}}>
+              <Text style={styles.modalTitle}>
+                {confirmInput === "delete"
+                  ? `Delete plant "${plant.qrCode}"?`
+                  : `Reset plant "${plant.qrCode}"?`}
+              </Text>
+              <Text style={styles.modalBody}>
+                {confirmInput === "delete"
+                  ? "The plant, its photos, and its actions will be permanently removed. The QR code can be scanned again to create a fresh entry. This cannot be undone."
+                  : "All photos, actions, name, species, GPS, and notes will be erased. The QR code stays bound to this plant. This cannot be undone."}
+              </Text>
+              <View style={styles.modalButtons}>
+                <TouchableOpacity
+                  onPress={() => setConfirmInput(null)}
+                  disabled={applying}
+                  style={styles.modalCancel}
+                >
+                  <Text style={styles.modalCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={submitConfirm}
+                  disabled={applying}
+                  style={[styles.modalDelete, applying && styles.modalDeleteDisabled]}
+                >
+                  {applying ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={styles.modalDeleteText}>
+                      {confirmInput === "delete" ? "Delete" : "Reset"}
+                    </Text>
+                  )}
                 </TouchableOpacity>
               </View>
             </Pressable>
@@ -1040,6 +1128,50 @@ const styles = StyleSheet.create({
     maxHeight: "70%",
   },
   modalTitle: { fontSize: 18, fontWeight: "600", marginBottom: 12 },
+  modalBody: { fontSize: 14, color: "#525252", lineHeight: 20, marginBottom: 4 },
+
+  menuBackdrop: { flex: 1 },
+  menu: {
+    position: "absolute",
+    minWidth: 180,
+    backgroundColor: "#fff",
+    borderRadius: 10,
+    paddingVertical: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#e5e5e5",
+    shadowColor: "#000",
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  menuItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  menuItemPressed: { backgroundColor: "#f5f5f5" },
+  menuItemText: { fontSize: 15, color: "#171717" },
+  menuItemDanger: { color: "#dc2626" },
+  menuSeparator: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: "#e5e5e5",
+    marginVertical: 4,
+  },
+
+  modalDelete: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    backgroundColor: "#dc2626",
+    borderRadius: 6,
+    minWidth: 60,
+    alignItems: "center",
+  },
+  modalDeleteDisabled: { opacity: 0.6 },
+  modalDeleteText: { color: "#fff", fontSize: 15, fontWeight: "500" },
+
   tagWrap: {
     flexDirection: "row",
     flexWrap: "wrap",
