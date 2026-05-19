@@ -38,16 +38,10 @@ const TILES: Tile[] = [
   },
   {
     key: "tag",
-    label: "Custom Tags",
+    label: "Tags",
     icon: TAG_KIND_STYLES.custom.icon,
-    iconColor: TAG_KIND_STYLES.custom.color,
+    iconColor: "#16a34a",
     onPress: (nav) => nav.push("BrowseEntries", { category: "tag" }),
-  },
-  {
-    key: "species",
-    label: "Species",
-    icon: "leaf-outline",
-    onPress: (nav) => nav.push("BrowseEntries", { category: "species" }),
   },
   {
     key: "all",

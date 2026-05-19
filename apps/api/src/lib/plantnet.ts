@@ -14,7 +14,9 @@ export type PlantNetResult = {
 };
 
 export function plantNetEnabled(): boolean {
-  return Boolean(env.PLANTNET_API_KEY);
+  // Temporarily disabled — identification quality wasn't producing useful
+  // matches. Flip back on once we have a better strategy.
+  return false;
 }
 
 export async function identifyFromFile(filePath: string): Promise<PlantNetResult | null> {

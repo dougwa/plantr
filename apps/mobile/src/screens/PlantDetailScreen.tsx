@@ -421,47 +421,67 @@ export default function PlantDetailScreen() {
             onSave={(v) => patch({ name: v || null })}
             big
           />
-          <View style={[styles.row, styles.rowMultiline]}>
-            <Pressable
-              onPress={() => setTagPickerOpen(true)}
-              hitSlop={6}
-              style={styles.rowLabelPressable}
-            >
-              <Text style={styles.rowLabel}>Tags</Text>
-            </Pressable>
-            <View style={styles.rowValueWrap}>
-              {plant.tags.length > 0 ? (
-                <View style={styles.tagWrap}>
-                  {plant.tags.map((t) => (
-                    <Pressable
-                      key={t.id}
-                      onPress={() => openTagBrowse(t)}
-                      hitSlop={4}
-                    >
-                      <TagBubble tag={t} />
-                    </Pressable>
-                  ))}
-                  <Pressable onPress={() => setTagPickerOpen(true)} hitSlop={8}>
-                    <View style={styles.tagBubbleAdd}>
-                      <Ionicons name="add" size={14} color="#525252" />
-                    </View>
+          {(() => {
+            const customTags = plant.tags.filter((t) => t.kind === "custom");
+            const locationTags = plant.tags.filter((t) => t.kind === "location");
+            return (
+              <>
+                <View style={[styles.row, styles.rowMultiline]}>
+                  <Pressable
+                    onPress={() => setTagPickerOpen(true)}
+                    hitSlop={6}
+                    style={styles.rowLabelPressable}
+                  >
+                    <Text style={styles.rowLabel}>Tags</Text>
                   </Pressable>
+                  <View style={styles.rowValueWrap}>
+                    {customTags.length > 0 ? (
+                      <View style={styles.tagWrap}>
+                        {customTags.map((t) => (
+                          <Pressable
+                            key={t.id}
+                            onPress={() => openTagBrowse(t)}
+                            hitSlop={4}
+                          >
+                            <TagBubble tag={t} />
+                          </Pressable>
+                        ))}
+                        <Pressable onPress={() => setTagPickerOpen(true)} hitSlop={8}>
+                          <View style={styles.tagBubbleAdd}>
+                            <Ionicons name="add" size={14} color="#525252" />
+                          </View>
+                        </Pressable>
+                      </View>
+                    ) : (
+                      <Pressable onPress={() => setTagPickerOpen(true)}>
+                        <Text style={[styles.rowValue, styles.placeholderValue]}>
+                          Add tags
+                        </Text>
+                      </Pressable>
+                    )}
+                  </View>
                 </View>
-              ) : (
-                <Pressable onPress={() => setTagPickerOpen(true)}>
-                  <Text style={[styles.rowValue, styles.placeholderValue]}>
-                    Add tags
-                  </Text>
-                </Pressable>
-              )}
-            </View>
-          </View>
-          <EditableText
-            label="Species"
-            value={plant.species}
-            placeholder="Add species"
-            onSave={(v) => patch({ species: v || null })}
-          />
+                {locationTags.length > 0 && (
+                  <View style={[styles.row, styles.rowMultiline]}>
+                    <Text style={styles.rowLabel}>Location</Text>
+                    <View style={styles.rowValueWrap}>
+                      <View style={styles.tagWrap}>
+                        {locationTags.map((t) => (
+                          <Pressable
+                            key={t.id}
+                            onPress={() => openTagBrowse(t)}
+                            hitSlop={4}
+                          >
+                            <TagBubble tag={t} />
+                          </Pressable>
+                        ))}
+                      </View>
+                    </View>
+                  </View>
+                )}
+              </>
+            );
+          })()}
           <EditableText
             label="Description"
             value={plant.description}
