@@ -17,7 +17,7 @@ export const codeRoutes: FastifyPluginAsync = async (app) => {
         where: { qrCode: code },
         include: PLANT_INCLUDE,
       });
-      if (plant) return { type: "plant" as const, plant: publicPlant(plant) };
+      if (plant) return { type: "plant" as const, plant: await publicPlant(plant) };
       const shape = await prisma.locationShape.findUnique({ where: { qrCode: code } });
       if (shape) return { type: "shape" as const, shape: toPublicShape(shape) };
       return reply.code(404).send({ error: "not_found" });

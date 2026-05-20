@@ -1,4 +1,3 @@
-import { createReadStream } from "node:fs";
 import { env } from "../env.js";
 
 const PLANTNET_URL = "https://my-api.plantnet.org/v2/identify/all";
@@ -19,12 +18,11 @@ export function plantNetEnabled(): boolean {
   return false;
 }
 
-export async function identifyFromFile(filePath: string): Promise<PlantNetResult | null> {
+export async function identifyFromBuffer(buffer: Buffer): Promise<PlantNetResult | null> {
   if (!plantNetEnabled()) return null;
 
   const form = new FormData();
-  const fileBlob = await fileToBlob(filePath);
-  form.append("images", fileBlob, "photo.jpg");
+  form.append("images", new Blob([buffer]), "photo.jpg");
   form.append("organs", "auto");
 
   const url = `${PLANTNET_URL}?api-key=${encodeURIComponent(env.PLANTNET_API_KEY!)}`;
@@ -62,12 +60,4 @@ export async function identifyFromFile(filePath: string): Promise<PlantNetResult
     score: top.score,
     raw: top,
   };
-}
-
-async function fileToBlob(filePath: string): Promise<Blob> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of createReadStream(filePath)) {
-    chunks.push(Buffer.from(chunk as Buffer));
-  }
-  return new Blob([Buffer.concat(chunks)]);
 }

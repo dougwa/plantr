@@ -1,20 +1,15 @@
 import type { FastifyPluginAsync } from "fastify";
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
 import { z } from "zod";
 import { prisma } from "../db.js";
 import {
-  deletePhotoFiles,
+  contentTypeFromMime,
+  deletePhotoObjects,
   extFromMime,
-  mimeFromVariant,
-  streamPhoto,
-  writePhotoFromBuffer,
-  type PhotoVariant,
+  uploadPhotoFromBuffer,
 } from "../lib/photos.js";
-import { identifyFromFile, plantNetEnabled } from "../lib/plantnet.js";
+import { identifyFromBuffer, plantNetEnabled } from "../lib/plantnet.js";
 import { PLANT_INCLUDE, publicPhoto, publicPlant } from "../lib/serializers.js";
-
-const VARIANTS = new Set<PhotoVariant>(["original", "thumb", "cover"]);
 
 const patchSchema = z.object({
   setCover: z.boolean().optional(),
@@ -37,20 +32,21 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
 
       const photoId = randomUUID();
       const ext = extFromMime(file.mimetype);
-      const paths = await writePhotoFromBuffer({
+      const keys = await uploadPhotoFromBuffer({
         plantId,
         photoId,
         buffer,
         originalExt: ext,
+        originalContentType: contentTypeFromMime(file.mimetype),
       });
 
       const photo = await prisma.photo.create({
         data: {
           id: photoId,
           plantId,
-          originalPath: paths.original,
-          thumbnailPath: paths.thumb,
-          coverPath: paths.cover,
+          originalPath: keys.original,
+          thumbnailPath: keys.thumb,
+          coverPath: keys.cover,
           createdById: req.user!.id,
         },
         include: { createdBy: { select: { id: true, username: true } } },
@@ -66,7 +62,7 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
 
       if (isFirstPhoto && !plant.name && plantNetEnabled()) {
         // Fire and forget — don't block the upload response on PlantNet.
-        identifyFromFile(paths.original)
+        identifyFromBuffer(buffer)
           .then(async (result) => {
             if (!result) return;
             await prisma.plant.update({
@@ -82,7 +78,7 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
           .catch((err) => req.log.warn({ err }, "plantnet failed"));
       }
 
-      return reply.code(201).send({ photo: publicPhoto(photo) });
+      return reply.code(201).send({ photo: await publicPhoto(photo) });
     },
   );
 
@@ -102,7 +98,7 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
           data: { coverPhotoId: photo.id },
           include: PLANT_INCLUDE,
         });
-        return { plant: publicPlant(plant) };
+        return { plant: await publicPlant(plant) };
       }
       return { ok: true };
     },
@@ -125,41 +121,12 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
         });
       }
       await prisma.photo.delete({ where: { id: photo.id } });
-      await deletePhotoFiles({
-        originalPath: photo.originalPath,
-        thumbnailPath: photo.thumbnailPath,
-        coverPath: photo.coverPath,
+      await deletePhotoObjects({
+        original: photo.originalPath,
+        thumb: photo.thumbnailPath,
+        cover: photo.coverPath,
       });
       return { ok: true };
     },
   );
-
-  app.get<{ Params: { id: string; variant: string } }>(
-    "/photos/:id/file/:variant",
-    { onRequest: [app.requireAuth] },
-    async (req, reply) => {
-      const variant = req.params.variant as PhotoVariant;
-      if (!VARIANTS.has(variant)) {
-        return reply.code(400).send({ error: "invalid_variant" });
-      }
-      const photo = await prisma.photo.findUnique({ where: { id: req.params.id } });
-      if (!photo) return reply.code(404).send({ error: "not_found" });
-
-      const filePath =
-        variant === "original"
-          ? photo.originalPath
-          : variant === "thumb"
-            ? photo.thumbnailPath
-            : photo.coverPath;
-
-      if (!existsSync(filePath)) {
-        return reply.code(404).send({ error: "file_missing" });
-      }
-
-      reply.header("cache-control", "private, max-age=31536000, immutable");
-      reply.type(mimeFromVariant(variant, filePath));
-      return reply.send(streamPhoto(filePath));
-    },
-  );
 };
-

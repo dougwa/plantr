@@ -1,62 +1,48 @@
 import { useEffect, useState } from "react";
 import { Image, View, type ImageProps } from "react-native";
-import { useAuth } from "../contexts/AuthContext";
-import { API_URL } from "../lib/api";
 import { getCachedImageUri, getCachedImageUriSync } from "../lib/imageCache";
 
 type Props = Omit<ImageProps, "source"> & { path: string };
 
+// `path` is the signed photo URL from the API (absolute, including a query
+// signature that rotates per response). The cache key strips the query so we
+// keep one cached file per object even as the signature is refreshed.
+function cacheKeyFor(url: string): string {
+  const q = url.indexOf("?");
+  return q === -1 ? url : url.slice(0, q);
+}
+
 export default function AuthImage({ path, ...rest }: Props) {
-  const { state } = useAuth();
-  const token = state.status === "authed" ? state.token : null;
-  const [uri, setUri] = useState<string | null>(() =>
-    token ? getCachedImageUriSync(path) : null,
-  );
+  const cacheKey = cacheKeyFor(path);
+  const [uri, setUri] = useState<string | null>(() => getCachedImageUriSync(cacheKey));
 
   useEffect(() => {
-    if (!token) {
-      setUri(null);
-      return;
-    }
-    const sync = getCachedImageUriSync(path);
+    const sync = getCachedImageUriSync(cacheKey);
     if (sync) {
       setUri(sync);
       return;
     }
     setUri(null);
     let cancelled = false;
-    const remoteUrl = `${API_URL}${path}`;
-    getCachedImageUri(remoteUrl, path, token).then(
+    getCachedImageUri(path, cacheKey).then(
       (localUri) => {
         if (!cancelled) setUri(localUri);
       },
       (err) => {
         if (!cancelled) {
           console.warn("image cache failed, falling back to remote", err);
-          setUri(remoteUrl);
+          setUri(path);
         }
       },
     );
     return () => {
       cancelled = true;
     };
-  }, [path, token]);
-
-  if (!token) return null;
+  }, [path, cacheKey]);
 
   if (!uri) {
     return <View style={rest.style as object} />;
   }
 
-  const isLocal = uri.startsWith("file:");
-  return (
-    <Image
-      {...rest}
-      source={
-        isLocal
-          ? { uri }
-          : { uri, headers: { Authorization: `Bearer ${token}` } }
-      }
-    />
-  );
+  return <Image {...rest} source={{ uri }} />;
 }

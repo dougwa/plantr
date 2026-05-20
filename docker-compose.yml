@@ -27,10 +27,19 @@ services:
       API_HOST: 0.0.0.0
       API_PORT: 4000
       DATABASE_URL: postgresql://${POSTGRES_USER:-plantr}:${POSTGRES_PASSWORD:-plantr}@postgres:5432/${POSTGRES_DB:-plantr}?schema=public
-      STORAGE_DIR: /app/storage
       AUTH_TOKEN_SECRET: ${AUTH_TOKEN_SECRET}
       PLANTNET_API_KEY: ${PLANTNET_API_KEY:-}
+      SPACES_REGION: ${SPACES_REGION}
+      SPACES_BUCKET: ${SPACES_BUCKET}
+      SPACES_ACCESS_KEY_ID: ${SPACES_ACCESS_KEY_ID}
+      SPACES_SECRET_ACCESS_KEY: ${SPACES_SECRET_ACCESS_KEY}
+      SPACES_CDN_ENABLED: ${SPACES_CDN_ENABLED:-true}
+      SPACES_URL_EXPIRY_SECONDS: ${SPACES_URL_EXPIRY_SECONDS:-86400}
+      # Only read by the one-shot photo migration script.
+      STORAGE_DIR: /app/storage
     volumes:
+      # Holds the legacy local photos so the migration script can read them.
+      # Safe to remove this volume once migrate-photos has run successfully.
       - api-storage:/app/storage
 
   web:

@@ -25,6 +25,10 @@ COPY --from=build /repo/node_modules /repo/node_modules
 COPY --from=build /repo/apps/api/node_modules /repo/apps/api/node_modules
 COPY --from=build /repo/apps/api/dist /repo/apps/api/dist
 COPY --from=build /repo/apps/api/prisma /repo/apps/api/prisma
+COPY --from=build /repo/apps/api/scripts /repo/apps/api/scripts
+COPY --from=build /repo/apps/api/src /repo/apps/api/src
+COPY --from=build /repo/apps/api/tsconfig.json /repo/apps/api/tsconfig.json
+COPY --from=build /repo/apps/api/tsconfig.scripts.json /repo/apps/api/tsconfig.scripts.json
 COPY --from=build /repo/apps/api/package.json /repo/apps/api/package.json
 RUN mkdir -p /app/storage
 EXPOSE 4000

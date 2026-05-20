@@ -84,13 +84,6 @@ async function request<T>(
   return { ok: true, data };
 }
 
-export function photoUrl(token: string, urlPath: string): string {
-  // For mobile we always need the bearer token, but RN <Image> doesn't pass headers
-  // by default. We use the source.headers prop instead — see PhotoImage component.
-  void token;
-  return `${API_URL}${urlPath}`;
-}
-
 // --- auth -------------------------------------------------------------------
 
 export async function login(username: string, password: string) {

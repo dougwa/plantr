@@ -29,7 +29,6 @@ export function getCachedImageUriSync(cacheKey: string): string | null {
 export async function getCachedImageUri(
   remoteUrl: string,
   cacheKey: string,
-  token: string,
 ): Promise<string> {
   const memHit = memCache.get(cacheKey);
   if (memHit) {
@@ -51,9 +50,7 @@ export async function getCachedImageUri(
     const t0 = Date.now();
     pending = (async () => {
       try {
-        const result = await FileSystem.downloadAsync(remoteUrl, fileUri, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const result = await FileSystem.downloadAsync(remoteUrl, fileUri);
         if (result.status < 200 || result.status >= 300) {
           await FileSystem.deleteAsync(fileUri, { idempotent: true });
           throw new Error(`Download failed: ${result.status}`);

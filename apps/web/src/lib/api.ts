@@ -121,7 +121,7 @@ export async function fetchLocationShapesServerSide(
   return data?.shapes ?? [];
 }
 
-// Photo URLs go through the Next.js /api rewrite so the auth cookie is sent.
-export function photoUrl(serverPath: string): string {
-  return `/api${serverPath}`;
+// Photo URLs from the API are now absolute, pre-signed Spaces URLs — return as-is.
+export function photoUrl(url: string): string {
+  return url;
 }

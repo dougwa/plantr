@@ -1,68 +1,74 @@
-import path from "node:path";
-import fs from "node:fs/promises";
-import { createReadStream } from "node:fs";
 import sharp from "sharp";
-import { env } from "../env.js";
-
-const STORAGE_ROOT = path.resolve(env.STORAGE_DIR);
+import { deleteObjects, putObject, signGetUrl } from "./spaces.js";
 
 export type PhotoVariant = "original" | "thumb" | "cover";
 
-export function plantPhotoDir(plantId: string) {
-  return path.join(STORAGE_ROOT, "photos", plantId);
-}
+export type PhotoKeys = {
+  original: string;
+  thumb: string;
+  cover: string;
+};
 
-export function photoFilePaths(plantId: string, photoId: string, originalExt: string) {
-  const dir = plantPhotoDir(plantId);
+export function photoObjectKeys(
+  plantId: string,
+  photoId: string,
+  originalExt: string,
+): PhotoKeys {
   const ext = (originalExt || "jpg").replace(/^\./, "").toLowerCase();
+  const base = `photos/${plantId}/${photoId}`;
   return {
-    original: path.join(dir, `${photoId}.original.${ext}`),
-    thumb: path.join(dir, `${photoId}.thumb.jpg`),
-    cover: path.join(dir, `${photoId}.cover.jpg`),
+    original: `${base}.original.${ext}`,
+    thumb: `${base}.thumb.jpg`,
+    cover: `${base}.cover.jpg`,
   };
 }
 
-export async function writePhotoFromBuffer(opts: {
+export async function uploadPhotoFromBuffer(opts: {
   plantId: string;
   photoId: string;
   buffer: Buffer;
   originalExt: string;
-}) {
-  const dir = plantPhotoDir(opts.plantId);
-  await fs.mkdir(dir, { recursive: true });
-  const paths = photoFilePaths(opts.plantId, opts.photoId, opts.originalExt);
+  originalContentType: string;
+}): Promise<PhotoKeys> {
+  const keys = photoObjectKeys(opts.plantId, opts.photoId, opts.originalExt);
 
-  await fs.writeFile(paths.original, opts.buffer);
-
-  await sharp(opts.buffer)
-    .rotate()
-    .resize({ width: 300, height: 300, fit: "cover" })
-    .jpeg({ quality: 80 })
-    .toFile(paths.thumb);
-
-  await sharp(opts.buffer)
-    .rotate()
-    .resize({ width: 1200, height: 1200, fit: "inside", withoutEnlargement: true })
-    .jpeg({ quality: 85 })
-    .toFile(paths.cover);
-
-  return paths;
-}
-
-export async function deletePhotoFiles(opts: {
-  originalPath: string;
-  thumbnailPath: string;
-  coverPath: string;
-}) {
-  await Promise.allSettled([
-    fs.unlink(opts.originalPath),
-    fs.unlink(opts.thumbnailPath),
-    fs.unlink(opts.coverPath),
+  const [thumbBuf, coverBuf] = await Promise.all([
+    sharp(opts.buffer)
+      .rotate()
+      .resize({ width: 300, height: 300, fit: "cover" })
+      .jpeg({ quality: 80 })
+      .toBuffer(),
+    sharp(opts.buffer)
+      .rotate()
+      .resize({ width: 1200, height: 1200, fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality: 85 })
+      .toBuffer(),
   ]);
+
+  await Promise.all([
+    putObject({
+      key: keys.original,
+      body: opts.buffer,
+      contentType: opts.originalContentType,
+    }),
+    putObject({ key: keys.thumb, body: thumbBuf, contentType: "image/jpeg" }),
+    putObject({ key: keys.cover, body: coverBuf, contentType: "image/jpeg" }),
+  ]);
+
+  return keys;
 }
 
-export function streamPhoto(filePath: string) {
-  return createReadStream(filePath);
+export async function deletePhotoObjects(keys: PhotoKeys): Promise<void> {
+  await deleteObjects([keys.original, keys.thumb, keys.cover]);
+}
+
+export async function signedUrlsFor(keys: PhotoKeys): Promise<PhotoKeys> {
+  const [original, thumb, cover] = await Promise.all([
+    signGetUrl(keys.original),
+    signGetUrl(keys.thumb),
+    signGetUrl(keys.cover),
+  ]);
+  return { original, thumb, cover };
 }
 
 export function extFromMime(mime: string | undefined): string {
@@ -75,13 +81,11 @@ export function extFromMime(mime: string | undefined): string {
   return "jpg";
 }
 
-export function mimeFromVariant(variant: PhotoVariant, originalPath: string): string {
-  if (variant === "original") {
-    const ext = path.extname(originalPath).slice(1).toLowerCase();
-    if (ext === "png") return "image/png";
-    if (ext === "webp") return "image/webp";
-    if (ext === "heic" || ext === "heif") return "image/heic";
-    return "image/jpeg";
-  }
+export function contentTypeFromMime(mime: string | undefined): string {
+  if (!mime) return "image/jpeg";
+  const m = mime.toLowerCase();
+  if (m.includes("png")) return "image/png";
+  if (m.includes("webp")) return "image/webp";
+  if (m.includes("heic") || m.includes("heif")) return "image/heic";
   return "image/jpeg";
 }

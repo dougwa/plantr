@@ -1,4 +1,5 @@
 import type { Action, ActionKind, Photo, Plant, Tag, TagKind, User } from "@prisma/client";
+import { signedUrlsFor } from "./photos.js";
 
 export type PublicPhoto = {
   id: string;
@@ -66,16 +67,17 @@ export function publicTag(t: Tag): PublicTag {
   };
 }
 
-export function publicPhoto(photo: PhotoWithCreator): PublicPhoto {
+export async function publicPhoto(photo: PhotoWithCreator): Promise<PublicPhoto> {
+  const urls = await signedUrlsFor({
+    original: photo.originalPath,
+    thumb: photo.thumbnailPath,
+    cover: photo.coverPath,
+  });
   return {
     id: photo.id,
     createdAt: photo.createdAt,
     createdBy: { id: photo.createdBy.id, username: photo.createdBy.username },
-    urls: {
-      original: `/photos/${photo.id}/file/original`,
-      thumb: `/photos/${photo.id}/file/thumb`,
-      cover: `/photos/${photo.id}/file/cover`,
-    },
+    urls,
   };
 }
 
@@ -90,7 +92,11 @@ export function publicAction(action: ActionWithCreator): PublicAction {
   };
 }
 
-export function publicPlant(plant: PlantWithRelations): PublicPlant {
+export async function publicPlant(plant: PlantWithRelations): Promise<PublicPlant> {
+  const [coverPhoto, photos] = await Promise.all([
+    plant.coverPhoto ? publicPhoto(plant.coverPhoto) : Promise.resolve(null),
+    Promise.all(plant.photos.map(publicPhoto)),
+  ]);
   return {
     id: plant.id,
     qrCode: plant.qrCode,
@@ -102,8 +108,8 @@ export function publicPlant(plant: PlantWithRelations): PublicPlant {
     gpsLat: plant.gpsLat,
     gpsLng: plant.gpsLng,
     plantNetData: plant.plantNetData,
-    coverPhoto: plant.coverPhoto ? publicPhoto(plant.coverPhoto) : null,
-    photos: plant.photos.map(publicPhoto),
+    coverPhoto,
+    photos,
     actions: plant.actions.map(publicAction),
     createdBy: { id: plant.createdBy.id, username: plant.createdBy.username },
     createdAt: plant.createdAt,

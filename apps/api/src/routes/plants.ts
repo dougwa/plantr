@@ -1,7 +1,8 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { prisma } from "../db.js";
-import { deletePhotoFiles } from "../lib/photos.js";
+import { deletePhotoObjects } from "../lib/photos.js";
+import { signGetUrl } from "../lib/spaces.js";
 import { PLANT_INCLUDE, publicPlant, publicTag } from "../lib/serializers.js";
 import { qrCodeSchema } from "../lib/qr-code.js";
 import {
@@ -31,22 +32,24 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
       orderBy: { createdAt: "asc" },
       include: {
         tags: { orderBy: [{ kind: "asc" }, { name: "asc" }] },
-        coverPhoto: { select: { id: true } },
+        coverPhoto: { select: { thumbnailPath: true } },
       },
     });
     return {
-      plants: plants.map((p) => ({
-        id: p.id,
-        qrCode: p.qrCode,
-        name: p.name,
-        tags: p.tags.map(publicTag),
-        species: p.species,
-        gpsLat: p.gpsLat,
-        gpsLng: p.gpsLng,
-        coverPhotoThumbUrl: p.coverPhoto
-          ? `/photos/${p.coverPhoto.id}/file/thumb`
-          : null,
-      })),
+      plants: await Promise.all(
+        plants.map(async (p) => ({
+          id: p.id,
+          qrCode: p.qrCode,
+          name: p.name,
+          tags: p.tags.map(publicTag),
+          species: p.species,
+          gpsLat: p.gpsLat,
+          gpsLng: p.gpsLng,
+          coverPhotoThumbUrl: p.coverPhoto
+            ? await signGetUrl(p.coverPhoto.thumbnailPath)
+            : null,
+        })),
+      ),
     };
   });
 
@@ -63,7 +66,7 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
         include: PLANT_INCLUDE,
       });
       if (!plant) return reply.code(404).send({ error: "not_found" });
-      return { plant: publicPlant(plant) };
+      return { plant: await publicPlant(plant) };
     },
   );
 
@@ -97,7 +100,7 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
       },
       include: PLANT_INCLUDE,
     });
-    return reply.code(201).send({ plant: publicPlant(plant) });
+    return reply.code(201).send({ plant: await publicPlant(plant) });
   });
 
   app.get<{ Params: { id: string } }>(
@@ -109,7 +112,7 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
         include: PLANT_INCLUDE,
       });
       if (!plant) return reply.code(404).send({ error: "not_found" });
-      return { plant: publicPlant(plant) };
+      return { plant: await publicPlant(plant) };
     },
   );
 
@@ -164,9 +167,9 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
           where: { id: updated.id },
           include: PLANT_INCLUDE,
         });
-        if (refreshed) return { plant: publicPlant(refreshed) };
+        if (refreshed) return { plant: await publicPlant(refreshed) };
       }
-      return { plant: publicPlant(updated) };
+      return { plant: await publicPlant(updated) };
     },
   );
 
@@ -195,10 +198,10 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
       await prisma.photo.deleteMany({ where: { plantId: id } });
       await Promise.all(
         plant.photos.map((p) =>
-          deletePhotoFiles({
-            originalPath: p.originalPath,
-            thumbnailPath: p.thumbnailPath,
-            coverPath: p.coverPath,
+          deletePhotoObjects({
+            original: p.originalPath,
+            thumb: p.thumbnailPath,
+            cover: p.coverPath,
           }),
         ),
       );
@@ -216,12 +219,12 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
         },
         include: PLANT_INCLUDE,
       });
-      return { plant: publicPlant(reset) };
+      return { plant: await publicPlant(reset) };
     },
   );
 
   // Delete removes the plant entirely. Photos and actions cascade via the
-  // schema's onDelete: Cascade; we still need to remove the on-disk files.
+  // schema's onDelete: Cascade; we still need to remove the Spaces objects.
   app.delete<{ Params: { id: string } }>(
     "/plants/:id",
     { onRequest: [app.requireAuth] },
@@ -241,10 +244,10 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
       await prisma.plant.delete({ where: { id } });
       await Promise.all(
         plant.photos.map((p) =>
-          deletePhotoFiles({
-            originalPath: p.originalPath,
-            thumbnailPath: p.thumbnailPath,
-            coverPath: p.coverPath,
+          deletePhotoObjects({
+            original: p.originalPath,
+            thumb: p.thumbnailPath,
+            cover: p.coverPath,
           }),
         ),
       );
