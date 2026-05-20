@@ -67,8 +67,8 @@ export function publicTag(t: Tag): PublicTag {
   };
 }
 
-export async function publicPhoto(photo: PhotoWithCreator): Promise<PublicPhoto> {
-  const urls = await signedUrlsFor({
+export function publicPhoto(photo: PhotoWithCreator): PublicPhoto {
+  const urls = signedUrlsFor({
     original: photo.originalPath,
     thumb: photo.thumbnailPath,
     cover: photo.coverPath,
@@ -92,11 +92,7 @@ export function publicAction(action: ActionWithCreator): PublicAction {
   };
 }
 
-export async function publicPlant(plant: PlantWithRelations): Promise<PublicPlant> {
-  const [coverPhoto, photos] = await Promise.all([
-    plant.coverPhoto ? publicPhoto(plant.coverPhoto) : Promise.resolve(null),
-    Promise.all(plant.photos.map(publicPhoto)),
-  ]);
+export function publicPlant(plant: PlantWithRelations): PublicPlant {
   return {
     id: plant.id,
     qrCode: plant.qrCode,
@@ -108,8 +104,8 @@ export async function publicPlant(plant: PlantWithRelations): Promise<PublicPlan
     gpsLat: plant.gpsLat,
     gpsLng: plant.gpsLng,
     plantNetData: plant.plantNetData,
-    coverPhoto,
-    photos,
+    coverPhoto: plant.coverPhoto ? publicPhoto(plant.coverPhoto) : null,
+    photos: plant.photos.map(publicPhoto),
     actions: plant.actions.map(publicAction),
     createdBy: { id: plant.createdBy.id, username: plant.createdBy.username },
     createdAt: plant.createdAt,

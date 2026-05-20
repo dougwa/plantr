@@ -78,7 +78,7 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
           .catch((err) => req.log.warn({ err }, "plantnet failed"));
       }
 
-      return reply.code(201).send({ photo: await publicPhoto(photo) });
+      return reply.code(201).send({ photo: publicPhoto(photo) });
     },
   );
 
@@ -98,7 +98,7 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
           data: { coverPhotoId: photo.id },
           include: PLANT_INCLUDE,
         });
-        return { plant: await publicPlant(plant) };
+        return { plant: publicPlant(plant) };
       }
       return { ok: true };
     },

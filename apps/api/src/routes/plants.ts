@@ -36,20 +36,18 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
       },
     });
     return {
-      plants: await Promise.all(
-        plants.map(async (p) => ({
-          id: p.id,
-          qrCode: p.qrCode,
-          name: p.name,
-          tags: p.tags.map(publicTag),
-          species: p.species,
-          gpsLat: p.gpsLat,
-          gpsLng: p.gpsLng,
-          coverPhotoThumbUrl: p.coverPhoto
-            ? await signGetUrl(p.coverPhoto.thumbnailPath)
-            : null,
-        })),
-      ),
+      plants: plants.map((p) => ({
+        id: p.id,
+        qrCode: p.qrCode,
+        name: p.name,
+        tags: p.tags.map(publicTag),
+        species: p.species,
+        gpsLat: p.gpsLat,
+        gpsLng: p.gpsLng,
+        coverPhotoThumbUrl: p.coverPhoto
+          ? signGetUrl(p.coverPhoto.thumbnailPath)
+          : null,
+      })),
     };
   });
 
@@ -66,7 +64,7 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
         include: PLANT_INCLUDE,
       });
       if (!plant) return reply.code(404).send({ error: "not_found" });
-      return { plant: await publicPlant(plant) };
+      return { plant: publicPlant(plant) };
     },
   );
 
@@ -100,7 +98,7 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
       },
       include: PLANT_INCLUDE,
     });
-    return reply.code(201).send({ plant: await publicPlant(plant) });
+    return reply.code(201).send({ plant: publicPlant(plant) });
   });
 
   app.get<{ Params: { id: string } }>(
@@ -112,7 +110,7 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
         include: PLANT_INCLUDE,
       });
       if (!plant) return reply.code(404).send({ error: "not_found" });
-      return { plant: await publicPlant(plant) };
+      return { plant: publicPlant(plant) };
     },
   );
 
@@ -167,9 +165,9 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
           where: { id: updated.id },
           include: PLANT_INCLUDE,
         });
-        if (refreshed) return { plant: await publicPlant(refreshed) };
+        if (refreshed) return { plant: publicPlant(refreshed) };
       }
-      return { plant: await publicPlant(updated) };
+      return { plant: publicPlant(updated) };
     },
   );
 
@@ -219,7 +217,7 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
         },
         include: PLANT_INCLUDE,
       });
-      return { plant: await publicPlant(reset) };
+      return { plant: publicPlant(reset) };
     },
   );
 

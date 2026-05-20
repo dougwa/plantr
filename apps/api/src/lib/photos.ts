@@ -62,13 +62,12 @@ export async function deletePhotoObjects(keys: PhotoKeys): Promise<void> {
   await deleteObjects([keys.original, keys.thumb, keys.cover]);
 }
 
-export async function signedUrlsFor(keys: PhotoKeys): Promise<PhotoKeys> {
-  const [original, thumb, cover] = await Promise.all([
-    signGetUrl(keys.original),
-    signGetUrl(keys.thumb),
-    signGetUrl(keys.cover),
-  ]);
-  return { original, thumb, cover };
+export function signedUrlsFor(keys: PhotoKeys): PhotoKeys {
+  return {
+    original: signGetUrl(keys.original),
+    thumb: signGetUrl(keys.thumb),
+    cover: signGetUrl(keys.cover),
+  };
 }
 
 export function extFromMime(mime: string | undefined): string {
