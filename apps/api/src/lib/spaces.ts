@@ -58,9 +58,15 @@ export async function deleteObjects(keys: string[]): Promise<void> {
 
 // --- SigV4 presigner (GET only) --------------------------------------------
 
-const READ_HOSTNAME = env.SPACES_CDN_ENABLED
-  ? `${env.SPACES_BUCKET}.${env.SPACES_REGION}.cdn.digitaloceanspaces.com`
-  : `${env.SPACES_BUCKET}.${env.SPACES_REGION}.digitaloceanspaces.com`;
+// DigitalOcean Spaces CDN requires presigned URLs to be signed against the
+// origin host even when served from the CDN edge — the CDN forwards to origin
+// with the original Host header rewritten back to origin, so the signature has
+// to match the origin's expected canonical headers. (See DO docs: "use the
+// origin endpoint to create the signature and the CDN endpoint for the final
+// URL".)
+const ORIGIN_HOSTNAME = `${env.SPACES_BUCKET}.${env.SPACES_REGION}.digitaloceanspaces.com`;
+const CDN_HOSTNAME = `${env.SPACES_BUCKET}.${env.SPACES_REGION}.cdn.digitaloceanspaces.com`;
+const URL_HOSTNAME = env.SPACES_CDN_ENABLED ? CDN_HOSTNAME : ORIGIN_HOSTNAME;
 
 const SERVICE = "s3";
 
@@ -119,7 +125,7 @@ export function signGetUrl(key: string): string {
     .map(([k, v]) => `${k}=${v}`)
     .join("&");
 
-  const canonicalHeaders = `host:${READ_HOSTNAME}\n`;
+  const canonicalHeaders = `host:${ORIGIN_HOSTNAME}\n`;
   const payloadHash = "UNSIGNED-PAYLOAD";
 
   const canonicalRequest = [
@@ -149,5 +155,5 @@ export function signGetUrl(key: string): string {
     .update(stringToSign, "utf8")
     .digest("hex");
 
-  return `https://${READ_HOSTNAME}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
+  return `https://${URL_HOSTNAME}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
 }
