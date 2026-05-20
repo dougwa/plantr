@@ -7,6 +7,8 @@ import { env } from "../env.js";
 import { SESSION_COOKIE, generateToken, sessionExpiry } from "./tokens.js";
 import { deriveMustCompleteProfile, type AuthUser } from "./plugin.js";
 import { verifyAppleIdToken, verifyGoogleIdToken, type OAuthIdentity } from "./oauth.js";
+import { dispatch } from "../lib/notifications.js";
+import { isExpired } from "../lib/invitations.js";
 
 const SESSION_TTL_SECONDS = 365 * 24 * 60 * 60;
 
@@ -77,6 +79,47 @@ function toAuthUser(u: User): AuthUser {
     mustChangePass: u.mustChangePass,
     mustCompleteProfile: deriveMustCompleteProfile(u),
   };
+}
+
+/**
+ * When a user first lands with a verified email — fresh signup, OAuth, or
+ * completing their profile — surface any pending invitations sent to that
+ * email as in-app notifications. The invitation rows themselves are not
+ * mutated; the user still needs to explicitly accept.
+ */
+async function surfacePendingInvitations(
+  userId: string,
+  email: string | null,
+  log: import("fastify").FastifyBaseLogger,
+): Promise<void> {
+  if (!email) return;
+  const pending = await prisma.invitation.findMany({
+    where: { email, acceptedAt: null, expiresAt: { gt: new Date() } },
+    include: {
+      site: { select: { name: true } },
+      invitedBy: { select: { name: true, username: true } },
+    },
+  });
+  for (const inv of pending) {
+    const inviter = inv.invitedBy.name ?? inv.invitedBy.username;
+    await dispatch(
+      {
+        kind: "invitation_received",
+        data: {
+          invitationId: inv.id,
+          siteId: inv.siteId,
+          siteName: inv.site.name,
+          role: inv.role,
+          token: inv.token,
+          inviterName: inviter,
+        },
+        to: { userId },
+        subject: `${inviter} invited you to join ${inv.site.name} on PlantR`,
+        body: `Open Notifications in PlantR to accept the invitation to ${inv.site.name}.`,
+      },
+      log,
+    );
+  }
 }
 
 async function createSession(userId: string, reply: FastifyReply): Promise<string> {
@@ -217,6 +260,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       throw err;
     }
 
+    await surfacePendingInvitations(user.id, user.email, req.log);
     const token = await createSession(user.id, reply);
     return { token, user: toAuthUser(user) };
   });
@@ -242,6 +286,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       : null;
 
     const user = await resolveOAuthUser(OAuthProvider.APPLE, identity, composedName);
+    await surfacePendingInvitations(user.id, user.email, req.log);
     const token = await createSession(user.id, reply);
     return { token, user: toAuthUser(user) };
   });
@@ -262,6 +307,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     }
 
     const user = await resolveOAuthUser(OAuthProvider.GOOGLE, identity, identity.name);
+    await surfacePendingInvitations(user.id, user.email, req.log);
     const token = await createSession(user.id, reply);
     return { token, user: toAuthUser(user) };
   });
@@ -342,6 +388,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       }
       throw err;
     }
+    await surfacePendingInvitations(updated.id, updated.email, req.log);
     return { user: toAuthUser(updated) };
   });
 };

@@ -82,7 +82,13 @@ Coordinate with clients.
 6. Sign-up / Sign-in screens (email+password, Apple, Google).
 7. Profile-completion screen for legacy users.
 
-## Phase 6 — Web public unauth views
+## Phase 6 — Web public unauth views — DEFERRED
+
+Pushed out — the API already supports anonymous viewers (Phase 4), so the data
+contract is in place. The web UI for `/s/:siteId/...` public routes can land
+in a later milestone once invitations + retention are settled.
+
+Sketch (kept for the future):
 
 1. Public routes in `apps/web`: `/s/:siteId`, `/s/:siteId/plants/:plantId`, `/s/:siteId/map`, `/s/:siteId/browse/...` — no auth required.
 2. Middleware skips auth for these; API calls go anonymously and rely on Phase 4 anon-viewer logic.

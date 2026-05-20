@@ -223,6 +223,113 @@ export async function listSiteMembers(token: string, siteId: string) {
   );
 }
 
+// --- invitations ------------------------------------------------------------
+
+export type InvitationSummary = {
+  id: string;
+  siteId: string;
+  role: SiteRole;
+  email: string | null;
+  phone: string | null;
+  token: string;
+  invitedBy: { id: string; username: string; name: string | null };
+  expiresAt: string;
+  acceptedAt: string | null;
+  acceptedByUserId: string | null;
+  createdAt: string;
+};
+
+export async function listInvitations(token: string, siteId: string) {
+  return request<{ invitations: InvitationSummary[] }>(
+    `/sites/${encodeURIComponent(siteId)}/invitations`,
+    { method: "GET", token },
+  );
+}
+
+export async function createInvitation(
+  token: string,
+  siteId: string,
+  body: {
+    role: SiteRole;
+    email?: string;
+    phone?: string;
+    expiresInHours?: number;
+  },
+) {
+  return request<{ invitation: InvitationSummary }>(
+    `/sites/${encodeURIComponent(siteId)}/invitations`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+      token,
+    },
+  );
+}
+
+export async function deleteInvitation(token: string, siteId: string, invitationId: string) {
+  return request<{ ok: boolean }>(
+    `/sites/${encodeURIComponent(siteId)}/invitations/${encodeURIComponent(invitationId)}`,
+    { method: "DELETE", token },
+  );
+}
+
+export async function transferSiteOwnership(token: string, siteId: string, toUserId: string) {
+  return request<{ invitation: InvitationSummary }>(
+    `/sites/${encodeURIComponent(siteId)}/transfer`,
+    {
+      method: "POST",
+      body: JSON.stringify({ toUserId }),
+      token,
+    },
+  );
+}
+
+export async function acceptInvitation(token: string, invitationToken: string) {
+  return request<{ site: { id: string; name: string }; role: SiteRole }>(
+    `/invitations/${encodeURIComponent(invitationToken)}/accept`,
+    { method: "POST", token },
+  );
+}
+
+// --- notifications ----------------------------------------------------------
+
+export type NotificationItem = {
+  id: string;
+  kind:
+    | "invitation_received"
+    | "invitation_accepted"
+    | "ownership_offer"
+    | (string & {});
+  data: Record<string, unknown>;
+  readAt: string | null;
+  createdAt: string;
+};
+
+export async function listNotifications(token: string) {
+  return request<{ notifications: NotificationItem[] }>("/notifications", {
+    method: "GET",
+    token,
+  });
+}
+
+export async function unreadNotificationCount(token: string) {
+  return request<{ count: number }>("/notifications/unread-count", {
+    method: "GET",
+    token,
+  });
+}
+
+export async function markNotificationsRead(
+  token: string,
+  body: { ids?: string[]; all?: boolean },
+) {
+  return request<{ updated: number }>("/notifications/mark-read", {
+    method: "POST",
+    body: JSON.stringify(body),
+    token,
+  });
+}
+
 // --- auth -------------------------------------------------------------------
 
 export async function login(identifier: string, password: string) {

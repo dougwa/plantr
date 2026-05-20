@@ -19,6 +19,8 @@ import SitesScreen from "../screens/sites/SitesScreen";
 import SiteCreateScreen from "../screens/sites/SiteCreateScreen";
 import SiteManagementScreen from "../screens/sites/SiteManagementScreen";
 import PublicSiteSearchScreen from "../screens/sites/PublicSiteSearchScreen";
+import SiteInviteScreen from "../screens/sites/SiteInviteScreen";
+import NotificationsScreen from "../screens/sites/NotificationsScreen";
 import { useAuth } from "../contexts/AuthContext";
 import BottomBar from "./BottomBar";
 import type { RootStackParamList, RootTab } from "./types";
@@ -98,6 +100,8 @@ export default function AppNavigator() {
             <Stack.Screen name="SiteCreate" component={SiteCreateScreen} />
             <Stack.Screen name="PublicSiteSearch" component={PublicSiteSearchScreen} />
             <Stack.Screen name="SiteManagement" component={SiteManagementScreen} />
+            <Stack.Screen name="SiteInvite" component={SiteInviteScreen} />
+            <Stack.Screen name="Notifications" component={NotificationsScreen} />
             <Stack.Screen name="BrowseEntries" component={BrowseEntriesScreen} />
             <Stack.Screen name="BrowseSearch" component={BrowseSearchScreen} />
             <Stack.Screen name="PlantList" component={PlantListScreen} />

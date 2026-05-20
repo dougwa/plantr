@@ -9,6 +9,8 @@ export type RootStackParamList = {
   SiteCreate: undefined;
   PublicSiteSearch: undefined;
   SiteManagement: { siteId: string };
+  SiteInvite: { siteId: string };
+  Notifications: undefined;
   BrowseEntries: { category: BrowseCategory };
   BrowseSearch: undefined;
   PlantList: { filter: PlantFilter; title: string };

@@ -6,6 +6,8 @@ import { env } from "./env.js";
 import authPlugin from "./auth/plugin.js";
 import { authRoutes } from "./auth/routes.js";
 import { siteRoutes } from "./routes/sites.js";
+import { invitationRoutes } from "./routes/invitations.js";
+import { notificationRoutes } from "./routes/notifications.js";
 import sitePlugin from "./lib/site-scope.js";
 import { plantRoutes } from "./routes/plants.js";
 import { tagRoutes } from "./routes/tags.js";
@@ -27,6 +29,8 @@ await app.register(multipart, {
 await app.register(authPlugin);
 await app.register(authRoutes);
 await app.register(siteRoutes);
+await app.register(invitationRoutes);
+await app.register(notificationRoutes);
 
 // Tenant-scoped subtree — every data route lives under /sites/:siteId/* and
 // runs the site-scope preHandler which resolves req.site / req.role from the

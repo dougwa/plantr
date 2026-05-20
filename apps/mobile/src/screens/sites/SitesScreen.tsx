@@ -14,7 +14,7 @@ import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "../../navigation/types";
 import { useAuth } from "../../contexts/AuthContext";
-import type { SiteRole, SiteSummary } from "../../lib/api";
+import { unreadNotificationCount, type SiteRole, type SiteSummary } from "../../lib/api";
 
 type Nav = NativeStackNavigationProp<RootStackParamList, "Sites">;
 
@@ -28,21 +28,30 @@ const ROLE_LABEL: Record<SiteRole, string> = {
 export default function SitesScreen() {
   const nav = useNavigation<Nav>();
   const { state, refreshSites, setCurrentSite } = useAuth();
+  const token = state.status === "authed" ? state.token : null;
   const [refreshing, setRefreshing] = useState(false);
+  const [unread, setUnread] = useState<number>(0);
+
+  const refreshUnread = useCallback(async () => {
+    if (!token) return;
+    const r = await unreadNotificationCount(token);
+    if (r.ok) setUnread(r.data.count);
+  }, [token]);
 
   useFocusEffect(
     useCallback(() => {
       // Re-pull on focus — covers external mutations (a peer kicks you out,
       // an invitation got accepted, etc.).
       refreshSites();
-    }, [refreshSites]),
+      refreshUnread();
+    }, [refreshSites, refreshUnread]),
   );
 
   if (state.status !== "authed") return null;
 
   async function onRefresh() {
     setRefreshing(true);
-    await refreshSites();
+    await Promise.all([refreshSites(), refreshUnread()]);
     setRefreshing(false);
   }
 
@@ -55,7 +64,22 @@ export default function SitesScreen() {
         contentContainerStyle={styles.scroll}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        <Text style={styles.h1}>Sites</Text>
+        <View style={styles.titleRow}>
+          <Text style={styles.h1}>Sites</Text>
+          <Pressable
+            onPress={() => nav.push("Notifications")}
+            hitSlop={10}
+            accessibilityLabel="Notifications"
+            style={({ pressed }) => [styles.bellBtn, pressed && { opacity: 0.5 }]}
+          >
+            <Ionicons name="notifications-outline" size={24} color="#171717" />
+            {unread > 0 ? (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>{unread > 99 ? "99+" : unread}</Text>
+              </View>
+            ) : null}
+          </Pressable>
+        </View>
 
         <Pressable
           style={({ pressed }) => [styles.discoverRow, pressed && styles.pressed]}
@@ -152,7 +176,27 @@ function SiteRow({
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#fafafa" },
   scroll: { padding: 16, paddingBottom: 40 },
-  h1: { fontSize: 28, fontWeight: "600", color: "#171717", marginBottom: 16 },
+  titleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 16,
+  },
+  h1: { fontSize: 28, fontWeight: "600", color: "#171717" },
+  bellBtn: { padding: 4 },
+  badge: {
+    position: "absolute",
+    top: -2,
+    right: -4,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "#dc2626",
+    paddingHorizontal: 4,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  badgeText: { color: "#fff", fontSize: 11, fontWeight: "600" },
   pressed: { opacity: 0.7 },
   discoverRow: {
     flexDirection: "row",

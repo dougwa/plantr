@@ -4,12 +4,19 @@ import {
   MembershipRole,
   Prisma,
   Visibility,
+  type Invitation,
   type Membership,
   type Site,
   type User,
 } from "@prisma/client";
 import { prisma } from "../db.js";
 import { geocodeAddress } from "../lib/geocode.js";
+import {
+  defaultInvitationExpiry,
+  generateInviteToken,
+  isExpired,
+} from "../lib/invitations.js";
+import { dispatch } from "../lib/notifications.js";
 import { planLimits } from "../lib/plans.js";
 import {
   canManageMembers,
@@ -41,6 +48,23 @@ const memberPatchSchema = z.object({
   role: z.nativeEnum(MembershipRole),
 });
 
+const invitationCreateSchema = z
+  .object({
+    role: z.nativeEnum(MembershipRole),
+    email: z
+      .string()
+      .trim()
+      .toLowerCase()
+      .max(254)
+      .regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/)
+      .optional(),
+    phone: z.string().trim().min(3).max(32).optional(),
+    expiresInHours: z.coerce.number().int().min(1).max(720).optional(),
+  })
+  .refine((v) => !!v.email || !!v.phone, {
+    message: "invitation_requires_email_or_phone",
+  });
+
 const publicSearchSchema = z.object({
   q: z.string().trim().max(120).optional(),
   lat: z.coerce.number().min(-90).max(90).optional(),
@@ -67,6 +91,28 @@ function publicSite(s: SiteWithOwner) {
     createdAt: s.createdAt.toISOString(),
     updatedAt: s.updatedAt.toISOString(),
     owner: { id: s.owner.id, username: s.owner.username, name: s.owner.name },
+  };
+}
+
+function publicInvitation(
+  i: Invitation & { invitedBy: Pick<User, "id" | "username" | "name"> },
+) {
+  return {
+    id: i.id,
+    siteId: i.siteId,
+    role: i.role,
+    email: i.email,
+    phone: i.phone,
+    token: i.token,
+    invitedBy: {
+      id: i.invitedBy.id,
+      username: i.invitedBy.username,
+      name: i.invitedBy.name,
+    },
+    expiresAt: i.expiresAt.toISOString(),
+    acceptedAt: i.acceptedAt?.toISOString() ?? null,
+    acceptedByUserId: i.acceptedByUserId,
+    createdAt: i.createdAt.toISOString(),
   };
 }
 
@@ -396,11 +442,12 @@ export const siteRoutes: FastifyPluginAsync = async (app) => {
   );
 
   // -----------------------------------------------------------------------
-  // POST /sites/:siteId/transfer — move ownership to an existing member
+  // POST /sites/:siteId/transfer — propose an ownership transfer
   //
-  // Phase 8 will convert this into an invite-style acceptance flow; for now
-  // the transfer is immediate. Existing owner becomes Admin so they can keep
-  // working until the new owner has a chance to adjust permissions.
+  // Creates a pending OWNER-role Invitation aimed at an existing member. The
+  // actual role swap only happens when they accept via
+  // POST /invitations/:token/accept. Original owner keeps full access until
+  // then. Expires after 7 days so dangling offers don't pile up.
   // -----------------------------------------------------------------------
   app.post<{ Params: { siteId: string } }>(
     "/sites/:siteId/transfer",
@@ -417,32 +464,175 @@ export const siteRoutes: FastifyPluginAsync = async (app) => {
         return reply.code(400).send({ error: "already_owner" });
       }
 
-      const targetMembership = await prisma.membership.findUnique({
+      const target = await prisma.membership.findUnique({
         where: { siteId_userId: { siteId: ctx.site.id, userId: toUserId } },
+        include: { user: { select: { id: true, email: true, name: true, username: true } } },
       });
-      if (!targetMembership) {
+      if (!target) {
         return reply.code(400).send({ error: "target_not_member" });
       }
 
-      // Atomic role swap.
-      const updated = await prisma.$transaction(async (tx) => {
-        await tx.membership.update({
-          where: { id: targetMembership.id },
-          data: { role: MembershipRole.OWNER },
-        });
-        await tx.membership.update({
-          where: {
-            siteId_userId: { siteId: ctx.site.id, userId: ctx.site.ownerId },
-          },
-          data: { role: MembershipRole.ADMIN },
-        });
-        return tx.site.update({
-          where: { id: ctx.site.id },
-          data: { ownerId: toUserId },
-          include: { owner: { select: { id: true, username: true, name: true } } },
-        });
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      const invitation = await prisma.invitation.create({
+        data: {
+          siteId: ctx.site.id,
+          role: MembershipRole.OWNER,
+          email: target.user.email,
+          token: generateInviteToken(),
+          invitedById: req.user!.id,
+          expiresAt,
+        },
+        include: { invitedBy: { select: { id: true, username: true, name: true } } },
       });
-      return { site: publicSite(updated) };
+
+      await dispatch(
+        {
+          kind: "ownership_offer",
+          data: {
+            invitationId: invitation.id,
+            siteId: ctx.site.id,
+            siteName: ctx.site.name,
+            token: invitation.token,
+            inviterName: invitation.invitedBy.name ?? invitation.invitedBy.username,
+          },
+          to: { userId: target.user.id, email: target.user.email },
+          subject: `${invitation.invitedBy.name ?? invitation.invitedBy.username} wants to transfer ${ctx.site.name} to you`,
+          body: `Accept the offer in PlantR to take over as the owner of ${ctx.site.name}.`,
+        },
+        req.log,
+      );
+
+      return reply.code(201).send({ invitation: publicInvitation(invitation) });
+    },
+  );
+
+  // -----------------------------------------------------------------------
+  // POST /sites/:siteId/invitations — create an invitation
+  // -----------------------------------------------------------------------
+  app.post<{ Params: { siteId: string } }>(
+    "/sites/:siteId/invitations",
+    { onRequest: [app.requireAuth] },
+    async (req, reply) => {
+      const parsed = invitationCreateSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return reply.code(400).send({
+          error: "invalid_request",
+          details: parsed.error.flatten(),
+        });
+      }
+      const ctx = await loadSiteContext(req, reply, req.params.siteId, {
+        minRole: "ADMIN",
+      });
+      if (!ctx) return;
+      if (!canManageMembers(ctx.role)) {
+        return reply.code(403).send({ error: "insufficient_role" });
+      }
+      const { role, email, phone, expiresInHours } = parsed.data;
+
+      // OWNER invitations only flow through POST /sites/:siteId/transfer.
+      if (role === MembershipRole.OWNER) {
+        return reply.code(400).send({ error: "use_transfer_for_owner" });
+      }
+
+      const expiresAt = expiresInHours
+        ? new Date(Date.now() + expiresInHours * 60 * 60 * 1000)
+        : defaultInvitationExpiry();
+
+      const invitation = await prisma.invitation.create({
+        data: {
+          siteId: ctx.site.id,
+          role,
+          email: email ?? null,
+          phone: phone ?? null,
+          token: generateInviteToken(),
+          invitedById: req.user!.id,
+          expiresAt,
+        },
+        include: { invitedBy: { select: { id: true, username: true, name: true } } },
+      });
+
+      // If the invited email matches a registered user, post an in-app
+      // notification so they see it next time they open the app.
+      let matchedUserId: string | null = null;
+      if (email) {
+        const u = await prisma.user.findUnique({ where: { email } });
+        matchedUserId = u?.id ?? null;
+      }
+
+      const inviterDisplay =
+        invitation.invitedBy.name ?? invitation.invitedBy.username;
+      await dispatch(
+        {
+          kind: "invitation_received",
+          data: {
+            invitationId: invitation.id,
+            siteId: ctx.site.id,
+            siteName: ctx.site.name,
+            role,
+            token: invitation.token,
+            inviterName: inviterDisplay,
+          },
+          to: {
+            userId: matchedUserId ?? undefined,
+            email: email ?? null,
+            phone: phone ?? null,
+          },
+          subject: `${inviterDisplay} invited you to join ${ctx.site.name} on PlantR`,
+          body: `Open PlantR and accept the invitation to start collaborating on ${ctx.site.name}.`,
+        },
+        req.log,
+      );
+
+      return reply.code(201).send({ invitation: publicInvitation(invitation) });
+    },
+  );
+
+  // -----------------------------------------------------------------------
+  // GET /sites/:siteId/invitations — list pending invitations
+  // -----------------------------------------------------------------------
+  app.get<{ Params: { siteId: string } }>(
+    "/sites/:siteId/invitations",
+    { onRequest: [app.requireAuth] },
+    async (req, reply) => {
+      const ctx = await loadSiteContext(req, reply, req.params.siteId, {
+        minRole: "ADMIN",
+      });
+      if (!ctx) return;
+      if (!canManageMembers(ctx.role)) {
+        return reply.code(403).send({ error: "insufficient_role" });
+      }
+      const invitations = await prisma.invitation.findMany({
+        where: { siteId: ctx.site.id, acceptedAt: null },
+        include: { invitedBy: { select: { id: true, username: true, name: true } } },
+        orderBy: { createdAt: "desc" },
+      });
+      return { invitations: invitations.map(publicInvitation) };
+    },
+  );
+
+  // -----------------------------------------------------------------------
+  // DELETE /sites/:siteId/invitations/:invitationId — revoke
+  // -----------------------------------------------------------------------
+  app.delete<{ Params: { siteId: string; invitationId: string } }>(
+    "/sites/:siteId/invitations/:invitationId",
+    { onRequest: [app.requireAuth] },
+    async (req, reply) => {
+      const ctx = await loadSiteContext(req, reply, req.params.siteId, {
+        minRole: "ADMIN",
+      });
+      if (!ctx) return;
+      if (!canManageMembers(ctx.role)) {
+        return reply.code(403).send({ error: "insufficient_role" });
+      }
+      const invitation = await prisma.invitation.findFirst({
+        where: { id: req.params.invitationId, siteId: ctx.site.id },
+      });
+      if (!invitation) return reply.code(404).send({ error: "invitation_not_found" });
+      if (invitation.acceptedAt) {
+        return reply.code(409).send({ error: "already_accepted" });
+      }
+      await prisma.invitation.delete({ where: { id: invitation.id } });
+      return { ok: true };
     },
   );
 

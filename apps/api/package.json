@@ -15,7 +15,9 @@
     "migrate-photos": "dotenv -e ../../.env -- tsx scripts/migrate-photos-to-spaces.ts",
     "migrate-photos:container": "tsx scripts/migrate-photos-to-spaces.ts",
     "backfill-sites": "dotenv -e ../../.env -- tsx scripts/backfill-sites.ts",
-    "backfill-sites:container": "tsx scripts/backfill-sites.ts"
+    "backfill-sites:container": "tsx scripts/backfill-sites.ts",
+    "cleanup-deleted-sites": "dotenv -e ../../.env -- tsx scripts/cleanup-deleted-sites.ts",
+    "cleanup-deleted-sites:container": "tsx scripts/cleanup-deleted-sites.ts"
   },
   "prisma": {
     "seed": "dotenv -e ../../.env -- tsx prisma/seed.ts"

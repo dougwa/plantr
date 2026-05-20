@@ -17,10 +17,13 @@ import type { NativeStackNavigationProp, NativeStackScreenProps } from "@react-n
 import type { RootStackParamList } from "../../navigation/types";
 import { useAuth } from "../../contexts/AuthContext";
 import {
+  deleteInvitation,
   deleteSite,
   leaveSite,
+  listInvitations,
   listSiteMembers,
   patchSite,
+  type InvitationSummary,
   type SiteMember,
   type SiteRole,
   type SiteSummary,
@@ -45,12 +48,14 @@ export default function SiteManagementScreen() {
   const userId = state.status === "authed" ? state.user.id : null;
 
   const [members, setMembers] = useState<SiteMember[] | null>(null);
+  const [invitations, setInvitations] = useState<InvitationSummary[] | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [nextName, setNextName] = useState("");
   const [working, setWorking] = useState(false);
 
   const site: SiteSummary | undefined =
     state.status === "authed" ? state.sites.find((s) => s.id === siteId) : undefined;
+  const canManageMembers = site?.role === "OWNER" || site?.role === "ADMIN";
 
   const loadMembers = useCallback(async () => {
     if (!token) return;
@@ -58,10 +63,20 @@ export default function SiteManagementScreen() {
     if (r.ok) setMembers(r.data.members);
   }, [siteId, token]);
 
+  const loadInvitations = useCallback(async () => {
+    if (!token || !canManageMembers) {
+      setInvitations(null);
+      return;
+    }
+    const r = await listInvitations(token, siteId);
+    if (r.ok) setInvitations(r.data.invitations);
+  }, [siteId, token, canManageMembers]);
+
   useFocusEffect(
     useCallback(() => {
       loadMembers();
-    }, [loadMembers]),
+      loadInvitations();
+    }, [loadMembers, loadInvitations]),
   );
 
   if (state.status !== "authed") return null;
@@ -227,7 +242,19 @@ export default function SiteManagementScreen() {
           ) : null}
         </View>
 
-        <Text style={styles.sectionLabel}>MEMBERS</Text>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionLabel}>MEMBERS</Text>
+          {canManageMembers ? (
+            <Pressable
+              onPress={() => nav.push("SiteInvite", { siteId })}
+              hitSlop={6}
+              style={({ pressed }) => [styles.inlineBtn, pressed && { opacity: 0.5 }]}
+            >
+              <Ionicons name="add" size={16} color="#16a34a" />
+              <Text style={styles.inlineBtnText}>Invite</Text>
+            </Pressable>
+          ) : null}
+        </View>
         <View style={styles.card}>
           {members === null ? (
             <View style={{ padding: 16 }}>
@@ -241,7 +268,7 @@ export default function SiteManagementScreen() {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.memberName}>
                     {m.user.name ?? m.user.username}
-                    {m.user.id === state.user.id ? " (you)" : ""}
+                    {m.user.id === userId ? " (you)" : ""}
                   </Text>
                   <Text style={styles.memberMeta}>
                     {m.user.email ?? m.user.username} · {ROLE_LABEL[m.role]}
@@ -251,9 +278,43 @@ export default function SiteManagementScreen() {
             ))
           )}
         </View>
-        <Text style={styles.note}>
-          Inviting and role changes land in Phase 7. For now this is read-only.
-        </Text>
+
+        {canManageMembers && invitations && invitations.length > 0 ? (
+          <>
+            <Text style={styles.sectionLabel}>PENDING INVITATIONS</Text>
+            <View style={styles.card}>
+              {invitations.map((inv) => (
+                <View key={inv.id} style={styles.memberRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.memberName}>
+                      {inv.email ?? inv.phone ?? "Unknown invitee"}
+                    </Text>
+                    <Text style={styles.memberMeta}>
+                      {ROLE_LABEL[inv.role]} · expires {formatDate(inv.expiresAt)}
+                    </Text>
+                  </View>
+                  <Pressable
+                    onPress={async () => {
+                      if (!token) return;
+                      setWorking(true);
+                      const r = await deleteInvitation(token, siteId, inv.id);
+                      setWorking(false);
+                      if (!r.ok) {
+                        Alert.alert("Could not revoke", r.error);
+                        return;
+                      }
+                      await loadInvitations();
+                    }}
+                    hitSlop={8}
+                    accessibilityLabel="Revoke invitation"
+                  >
+                    <Ionicons name="trash-outline" size={18} color="#dc2626" />
+                  </Pressable>
+                </View>
+              ))}
+            </View>
+          </>
+        ) : null}
 
         {isOwner ? (
           <Pressable
@@ -384,6 +445,21 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     letterSpacing: 0.5,
   },
+  sectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  inlineBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: "#f0fdf4",
+  },
+  inlineBtnText: { color: "#16a34a", fontSize: 13, fontWeight: "500" },
   memberRow: {
     flexDirection: "row",
     alignItems: "center",
