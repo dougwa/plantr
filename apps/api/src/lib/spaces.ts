@@ -24,11 +24,17 @@ const credentials = {
   secretAccessKey: env.SPACES_SECRET_ACCESS_KEY,
 };
 
+// DO Spaces' SigV4 verifier disagrees with the SDK's default checksum-mode
+// query parameter, so signed GET URLs return SignatureDoesNotMatch. Forcing
+// WHEN_REQUIRED suppresses the x-amz-checksum-mode=ENABLED parameter the SDK
+// would otherwise add to GetObject signatures. (Uploads work either way.)
 const writeClient = new S3Client({
   region: env.SPACES_REGION,
   endpoint: ORIGIN_ENDPOINT,
   credentials,
   forcePathStyle: false,
+  requestChecksumCalculation: "WHEN_REQUIRED",
+  responseChecksumValidation: "WHEN_REQUIRED",
 });
 
 const readClient = new S3Client({
@@ -36,6 +42,8 @@ const readClient = new S3Client({
   endpoint: READ_ENDPOINT,
   credentials,
   forcePathStyle: false,
+  requestChecksumCalculation: "WHEN_REQUIRED",
+  responseChecksumValidation: "WHEN_REQUIRED",
 });
 
 export const SPACES_BUCKET = env.SPACES_BUCKET;
