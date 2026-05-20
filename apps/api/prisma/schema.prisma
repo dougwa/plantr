@@ -19,18 +19,51 @@ enum TagKind {
   location
 }
 
+enum Plan {
+  FREE
+}
+
+enum Visibility {
+  PRIVATE
+  PUBLIC
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  USER
+  VIEWER
+}
+
+enum OAuthProvider {
+  APPLE
+  GOOGLE
+}
+
 model User {
-  id             String          @id @default(cuid())
-  username       String          @unique
+  id             String   @id @default(cuid())
+  username       String   @unique
   passwordHash   String
-  mustChangePass Boolean         @default(false)
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
-  sessions       Session[]
-  plants         Plant[]
-  photos         Photo[]
-  actions        Action[]
-  locationShapes LocationShape[]
+  mustChangePass Boolean  @default(false)
+  // email becomes the canonical login identity in Phase 2. Nullable during
+  // Phase 1 backfill — tightens to NOT NULL once all rows have a value.
+  email          String?  @unique
+  name           String?
+  plan           Plan     @default(FREE)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  sessions            Session[]
+  plants              Plant[]
+  photos              Photo[]
+  actions             Action[]
+  locationShapes      LocationShape[]
+  ownedSites          Site[]         @relation("SiteOwner")
+  memberships         Membership[]
+  oauthAccounts       OAuthAccount[]
+  notifications       Notification[]
+  invitationsSent     Invitation[]   @relation("InvitedBy")
+  invitationsAccepted Invitation[]   @relation("AcceptedBy")
 }
 
 model Session {
@@ -45,19 +78,114 @@ model Session {
   @@index([userId])
 }
 
+// Site is the multi-tenant boundary. All plant data is scoped to a Site.
+// Owner has absolute control (delete, transfer, billing). Members access via
+// Membership rows with role-based permissions.
+model Site {
+  id         String     @id @default(cuid())
+  name       String
+  address    String?
+  lat        Float?
+  lng        Float?
+  visibility Visibility @default(PRIVATE)
+  ownerId    String
+  owner      User       @relation("SiteOwner", fields: [ownerId], references: [id])
+  // Soft-delete with 30-day retention. Hard-deleted by a separate cleanup job.
+  deletedAt  DateTime?
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  memberships    Membership[]
+  invitations    Invitation[]
+  plants         Plant[]
+  photos         Photo[]
+  actions        Action[]
+  locationShapes LocationShape[]
+  tags           Tag[]
+
+  @@index([ownerId])
+  @@index([visibility, deletedAt])
+}
+
+model Membership {
+  id        String         @id @default(cuid())
+  siteId    String
+  site      Site           @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      MembershipRole
+  createdAt DateTime       @default(now())
+
+  @@unique([siteId, userId])
+  @@index([userId])
+}
+
+model Invitation {
+  id               String         @id @default(cuid())
+  siteId           String
+  site             Site           @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  role             MembershipRole
+  email            String?
+  phone            String?
+  // Token is the bearer secret embedded in the invite link; consumed on accept.
+  token            String         @unique
+  invitedById      String
+  invitedBy        User           @relation("InvitedBy", fields: [invitedById], references: [id])
+  expiresAt        DateTime
+  acceptedAt       DateTime?
+  acceptedByUserId String?
+  acceptedBy       User?          @relation("AcceptedBy", fields: [acceptedByUserId], references: [id])
+  createdAt        DateTime       @default(now())
+
+  @@index([siteId])
+  @@index([email])
+  @@index([phone])
+}
+
+model OAuthAccount {
+  id                String        @id @default(cuid())
+  userId            String
+  user              User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider          OAuthProvider
+  providerAccountId String
+  createdAt         DateTime      @default(now())
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // kind discriminates the payload shape stored in data. Free-form string so
+  // adding new notification types doesn't require schema migrations.
+  kind      String
+  data      Json
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, readAt])
+}
+
 // Tag is the unified label model. `kind` partitions tags into UX-distinct
 // buckets (custom for free-form labels, location for shape-paired labels).
 // Location-kind tags are managed by LocationShape and cannot be edited directly.
+// siteId nullable in Phase 1 (backfilled by script); tightened in Phase 4 along
+// with a per-site uniqueness shift.
 model Tag {
   id              String         @id @default(cuid())
   name            String
   kind            TagKind        @default(custom)
   locationShapeId String?        @unique
   locationShape   LocationShape? @relation(fields: [locationShapeId], references: [id], onDelete: Cascade)
+  siteId          String?
+  site            Site?          @relation(fields: [siteId], references: [id], onDelete: Cascade)
   createdAt       DateTime       @default(now())
   plants          Plant[]
 
   @@unique([kind, name])
+  @@index([siteId])
 }
 
 model Plant {
@@ -72,6 +200,8 @@ model Plant {
   gpsLat       Float?
   gpsLng       Float?
   plantNetData Json?
+  siteId       String?
+  site         Site?    @relation(fields: [siteId], references: [id], onDelete: Cascade)
   createdById  String
   createdBy    User     @relation(fields: [createdById], references: [id])
   createdAt    DateTime @default(now())
@@ -80,6 +210,8 @@ model Plant {
   actions      Action[]
   // Plant-to-location relationship lives in `tags` via location-kind Tags.
   tags         Tag[]
+
+  @@index([siteId])
 }
 
 model Photo {
@@ -89,12 +221,15 @@ model Photo {
   originalPath  String
   thumbnailPath String
   coverPath     String
+  siteId        String?
+  site          Site?    @relation(fields: [siteId], references: [id], onDelete: Cascade)
   createdById   String
   createdBy     User     @relation(fields: [createdById], references: [id])
   createdAt     DateTime @default(now())
   coverOf       Plant?   @relation("PlantCover")
 
   @@index([plantId])
+  @@index([siteId])
 }
 
 model Action {
@@ -104,11 +239,14 @@ model Action {
   kind        ActionKind
   notes       String?
   takenAt     DateTime
+  siteId      String?
+  site        Site?      @relation(fields: [siteId], references: [id], onDelete: Cascade)
   createdById String
   createdBy   User       @relation(fields: [createdById], references: [id])
   createdAt   DateTime   @default(now())
 
   @@index([plantId, takenAt])
+  @@index([siteId])
 }
 
 model LocationShape {
@@ -124,6 +262,8 @@ model LocationShape {
   rotationDegrees Float    @default(0)
   locked          Boolean  @default(false)
   polygonPoints   Json?
+  siteId          String?
+  site            Site?    @relation(fields: [siteId], references: [id], onDelete: Cascade)
   createdById     String
   createdBy       User     @relation(fields: [createdById], references: [id])
   createdAt       DateTime @default(now())
@@ -131,4 +271,6 @@ model LocationShape {
   // Paired Tag (kind=location) is auto-managed by the API. Plants land here
   // via Plant.tags.
   tag             Tag?
+
+  @@index([siteId])
 }

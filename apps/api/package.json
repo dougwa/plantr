@@ -13,7 +13,9 @@
     "prisma:studio": "dotenv -e ../../.env -- prisma studio",
     "seed": "dotenv -e ../../.env -- tsx prisma/seed.ts",
     "migrate-photos": "dotenv -e ../../.env -- tsx scripts/migrate-photos-to-spaces.ts",
-    "migrate-photos:container": "tsx scripts/migrate-photos-to-spaces.ts"
+    "migrate-photos:container": "tsx scripts/migrate-photos-to-spaces.ts",
+    "backfill-sites": "dotenv -e ../../.env -- tsx scripts/backfill-sites.ts",
+    "backfill-sites:container": "tsx scripts/backfill-sites.ts"
   },
   "prisma": {
     "seed": "dotenv -e ../../.env -- tsx prisma/seed.ts"
