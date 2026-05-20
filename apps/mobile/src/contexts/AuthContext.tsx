@@ -11,19 +11,28 @@ import {
   changePassword as apiChangePassword,
   completeProfile as apiCompleteProfile,
   fetchMe as apiFetchMe,
+  listSites as apiListSites,
   login as apiLogin,
   logout as apiLogout,
   oauthApple as apiOAuthApple,
   oauthGoogle as apiOAuthGoogle,
+  setCurrentSiteId as apiSetCurrentSiteId,
   signup as apiSignup,
   type AuthUser,
+  type SiteSummary,
 } from "../lib/api";
 import { clearToken, loadToken, saveToken } from "../lib/storage";
 
 type AuthState =
   | { status: "loading" }
   | { status: "anon" }
-  | { status: "authed"; token: string; user: AuthUser };
+  | {
+      status: "authed";
+      token: string;
+      user: AuthUser;
+      currentSiteId: string | null;
+      sites: SiteSummary[];
+    };
 
 type Result = { ok: true } | { ok: false; error: string };
 
@@ -44,12 +53,45 @@ type AuthContextValue = {
     newPassword?: string;
   }) => Promise<Result>;
   refreshUser: () => Promise<void>;
+  refreshSites: () => Promise<void>;
+  setCurrentSite: (siteId: string | null) => void;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
+/**
+ * Pick a sensible default site: prefer one the user owns, then any membership.
+ * Returns null when the user has no memberships (fresh signups land here until
+ * they create or join a site).
+ */
+function pickDefaultSite(sites: SiteSummary[]): string | null {
+  const owned = sites.find((s) => s.role === "OWNER");
+  if (owned) return owned.id;
+  return sites[0]?.id ?? null;
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({ status: "loading" });
+
+  // Keep the api module's current-site singleton in sync with our state so
+  // any function called from any screen targets the right /sites/:siteId.
+  useEffect(() => {
+    if (state.status === "authed") {
+      apiSetCurrentSiteId(state.currentSiteId);
+    } else {
+      apiSetCurrentSiteId(null);
+    }
+  }, [state]);
+
+  const loadSitesAndAccept = useCallback(
+    async (token: string, user: AuthUser): Promise<void> => {
+      const sitesRes = await apiListSites(token);
+      const sites = sitesRes.ok ? sitesRes.data.sites : [];
+      const currentSiteId = pickDefaultSite(sites);
+      setState({ status: "authed", token, user, currentSiteId, sites });
+    },
+    [],
+  );
 
   useEffect(() => {
     (async () => {
@@ -64,14 +106,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setState({ status: "anon" });
         return;
       }
-      setState({ status: "authed", token, user });
+      await loadSitesAndAccept(token, user);
     })();
-  }, []);
+  }, [loadSitesAndAccept]);
 
-  const acceptSession = useCallback(async (token: string, user: AuthUser) => {
-    await saveToken(token);
-    setState({ status: "authed", token, user });
-  }, []);
+  const acceptSession = useCallback(
+    async (token: string, user: AuthUser): Promise<void> => {
+      await saveToken(token);
+      await loadSitesAndAccept(token, user);
+    },
+    [loadSitesAndAccept],
+  );
 
   const signIn = useCallback(
     async (identifier: string, password: string): Promise<Result> => {
@@ -129,7 +174,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!result.ok) return { ok: false, error: result.error };
       const refreshed = await apiFetchMe(state.token);
       if (refreshed) {
-        setState({ status: "authed", token: state.token, user: refreshed });
+        setState({ ...state, user: refreshed });
       }
       return { ok: true };
     },
@@ -145,7 +190,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (state.status !== "authed") return { ok: false, error: "not_authed" };
       const result = await apiCompleteProfile(state.token, body);
       if (!result.ok) return { ok: false, error: result.error };
-      setState({ status: "authed", token: state.token, user: result.data.user });
+      setState({ ...state, user: result.data.user });
       return { ok: true };
     },
     [state],
@@ -154,8 +199,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const refreshUser = useCallback(async () => {
     if (state.status !== "authed") return;
     const refreshed = await apiFetchMe(state.token);
-    if (refreshed) setState({ status: "authed", token: state.token, user: refreshed });
+    if (refreshed) setState({ ...state, user: refreshed });
   }, [state]);
+
+  const refreshSites = useCallback(async () => {
+    if (state.status !== "authed") return;
+    const r = await apiListSites(state.token);
+    if (!r.ok) return;
+    // If the previously-selected site disappeared (revoked, deleted), fall
+    // back to the default picker. Otherwise keep the user's selection.
+    const stillPresent = state.currentSiteId
+      ? r.data.sites.some((s) => s.id === state.currentSiteId)
+      : false;
+    const currentSiteId = stillPresent
+      ? state.currentSiteId
+      : pickDefaultSite(r.data.sites);
+    setState({ ...state, sites: r.data.sites, currentSiteId });
+  }, [state]);
+
+  const setCurrentSite = useCallback(
+    (siteId: string | null) => {
+      if (state.status !== "authed") return;
+      setState({ ...state, currentSiteId: siteId });
+    },
+    [state],
+  );
 
   const value = useMemo(
     () => ({
@@ -168,6 +236,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       changePassword,
       completeProfile,
       refreshUser,
+      refreshSites,
+      setCurrentSite,
     }),
     [
       state,
@@ -179,6 +249,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       changePassword,
       completeProfile,
       refreshUser,
+      refreshSites,
+      setCurrentSite,
     ],
   );
 

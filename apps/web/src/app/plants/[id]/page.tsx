@@ -1,7 +1,13 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { cookies } from "next/headers";
 import Link from "next/link";
-import { fetchPlantServerSide, photoUrl, type PublicAction, type Tag } from "@/lib/api";
+import {
+  fetchPlantServerSide,
+  photoUrl,
+  SITE_COOKIE,
+  type PublicAction,
+  type Tag,
+} from "@/lib/api";
 import { tagKindStyle } from "@/lib/tagStyle";
 
 function formatDate(iso: string): string {
@@ -30,7 +36,9 @@ export default async function PlantPage({ params }: { params: Promise<{ id: stri
     .getAll()
     .map((c) => `${c.name}=${c.value}`)
     .join("; ");
-  const plant = await fetchPlantServerSide(id, cookieHeader);
+  const siteId = cookieStore.get(SITE_COOKIE)?.value;
+  if (!siteId) redirect("/");
+  const plant = await fetchPlantServerSide(siteId, id, cookieHeader);
   if (!plant) notFound();
 
   return (

@@ -1,10 +1,13 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { deletePhotoObjects } from "../lib/photos.js";
 import { signGetUrl } from "../lib/spaces.js";
 import { PLANT_INCLUDE, publicPlant, publicTag } from "../lib/serializers.js";
 import { qrCodeSchema } from "../lib/qr-code.js";
+import { planLimits } from "../lib/plans.js";
+import { rejectIfReadOnly } from "../lib/site-access.js";
 import {
   resolveLocationTagIdsForPoint,
   syncPlantLocationTags,
@@ -27,8 +30,9 @@ const patchSchema = z.object({
 });
 
 export const plantRoutes: FastifyPluginAsync = async (app) => {
-  app.get("/plants", { onRequest: [app.requireAuth] }, async () => {
+  app.get("/plants", async (req) => {
     const plants = await prisma.plant.findMany({
+      where: { siteId: req.site!.id },
       orderBy: { createdAt: "asc" },
       include: {
         tags: { orderBy: [{ kind: "asc" }, { name: "asc" }] },
@@ -53,35 +57,52 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
 
   app.get<{ Params: { code: string } }>(
     "/plants/by-qr/:code",
-    { onRequest: [app.requireAuth] },
     async (req, reply) => {
       const code = req.params.code;
       if (!qrCodeSchema.safeParse(code).success) {
         return reply.code(400).send({ error: "invalid_qr_code" });
       }
       const plant = await prisma.plant.findUnique({
-        where: { qrCode: code },
+        where: { siteId_qrCode: { siteId: req.site!.id, qrCode: code } },
         include: PLANT_INCLUDE,
       });
       if (!plant) return reply.code(404).send({ error: "not_found" });
-      return { plant: publicPlant(plant) };
+      return { plant: publicPlant(plant, req.role) };
     },
   );
 
-  app.post("/plants", { onRequest: [app.requireAuth] }, async (req, reply) => {
+  app.post("/plants", async (req, reply) => {
+    if (rejectIfReadOnly(req, reply)) return;
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_request" });
     const { qrCode, gpsLat, gpsLng } = parsed.data;
+    const siteId = req.site!.id;
 
-    const existing = await prisma.plant.findUnique({ where: { qrCode } });
+    // Plan cap is keyed off the site owner's plan, not the caller's.
+    const owner = await prisma.user.findUniqueOrThrow({
+      where: { id: req.site!.ownerId },
+    });
+    const limits = planLimits(owner.plan);
+    const plantCount = await prisma.plant.count({ where: { siteId } });
+    if (plantCount >= limits.plantsPerSite) {
+      return reply.code(402).send({
+        error: "plan_limit_plants_per_site",
+        limit: limits.plantsPerSite,
+      });
+    }
+
+    const existing = await prisma.plant.findUnique({
+      where: { siteId_qrCode: { siteId, qrCode } },
+    });
     if (existing) return reply.code(409).send({ error: "qr_code_taken" });
     const shapeUsing = await prisma.locationShape.findUnique({
-      where: { qrCode },
+      where: { siteId_qrCode: { siteId, qrCode } },
       select: { id: true },
     });
     if (shapeUsing) return reply.code(409).send({ error: "qr_code_taken" });
 
     const locationTagIds = await resolveLocationTagIdsForPoint(
+      siteId,
       gpsLat ?? null,
       gpsLng ?? null,
     );
@@ -91,6 +112,7 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
         qrCode,
         gpsLat: gpsLat ?? null,
         gpsLng: gpsLng ?? null,
+        siteId,
         createdById: req.user!.id,
         tags: locationTagIds.length
           ? { connect: locationTagIds.map((id) => ({ id })) }
@@ -98,78 +120,72 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
       },
       include: PLANT_INCLUDE,
     });
-    return reply.code(201).send({ plant: publicPlant(plant) });
+    return reply.code(201).send({ plant: publicPlant(plant, req.role) });
   });
 
-  app.get<{ Params: { id: string } }>(
-    "/plants/:id",
-    { onRequest: [app.requireAuth] },
-    async (req, reply) => {
-      const plant = await prisma.plant.findUnique({
-        where: { id: req.params.id },
+  app.get<{ Params: { id: string } }>("/plants/:id", async (req, reply) => {
+    const plant = await prisma.plant.findFirst({
+      where: { id: req.params.id, siteId: req.site!.id },
+      include: PLANT_INCLUDE,
+    });
+    if (!plant) return reply.code(404).send({ error: "not_found" });
+    return { plant: publicPlant(plant, req.role) };
+  });
+
+  app.patch<{ Params: { id: string } }>("/plants/:id", async (req, reply) => {
+    if (rejectIfReadOnly(req, reply)) return;
+    const parsed = patchSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid_request", details: parsed.error.flatten() });
+    }
+
+    // Existence + tenant check before mutating.
+    const own = await prisma.plant.findFirst({
+      where: { id: req.params.id, siteId: req.site!.id },
+      select: { id: true },
+    });
+    if (!own) return reply.code(404).send({ error: "not_found" });
+
+    const { tagIds, ...rest } = parsed.data;
+    const data: Prisma.PlantUpdateInput = { ...rest };
+
+    if (tagIds !== undefined) {
+      if (tagIds.length > 0) {
+        const found = await prisma.tag.findMany({
+          where: { id: { in: tagIds }, siteId: req.site!.id },
+          select: { id: true },
+        });
+        if (found.length !== new Set(tagIds).size) {
+          return reply.code(400).send({ error: "invalid_tag_id" });
+        }
+      }
+      data.tags = { set: tagIds.map((id) => ({ id })) };
+    }
+
+    const updated = await prisma.plant.update({
+      where: { id: req.params.id },
+      data,
+      include: PLANT_INCLUDE,
+    });
+
+    // If GPS changed (and tagIds wasn't explicitly set in this same request),
+    // resync the plant's location-kind tags from the new GPS. tagIds set
+    // explicitly wins — user choice overrides auto-resolution for this call.
+    if (
+      tagIds === undefined &&
+      (parsed.data.gpsLat !== undefined || parsed.data.gpsLng !== undefined)
+    ) {
+      await syncPlantLocationTags(updated.id, updated.gpsLat, updated.gpsLng);
+      const refreshed = await prisma.plant.findUnique({
+        where: { id: updated.id },
         include: PLANT_INCLUDE,
       });
-      if (!plant) return reply.code(404).send({ error: "not_found" });
-      return { plant: publicPlant(plant) };
-    },
-  );
-
-  app.patch<{ Params: { id: string } }>(
-    "/plants/:id",
-    { onRequest: [app.requireAuth] },
-    async (req, reply) => {
-      const parsed = patchSchema.safeParse(req.body);
-      if (!parsed.success) {
-        return reply
-          .code(400)
-          .send({ error: "invalid_request", details: parsed.error.flatten() });
-      }
-
-      const { tagIds, ...rest } = parsed.data;
-      const data: Record<string, unknown> = { ...rest };
-
-      if (tagIds !== undefined) {
-        if (tagIds.length > 0) {
-          const found = await prisma.tag.findMany({
-            where: { id: { in: tagIds } },
-            select: { id: true },
-          });
-          if (found.length !== new Set(tagIds).size) {
-            return reply.code(400).send({ error: "invalid_tag_id" });
-          }
-        }
-        data.tags = { set: tagIds.map((id) => ({ id })) };
-      }
-
-      const updated = await prisma.plant
-        .update({
-          where: { id: req.params.id },
-          data,
-          include: PLANT_INCLUDE,
-        })
-        .catch((err: { code?: string }) => {
-          if (err.code === "P2025") return null;
-          throw err;
-        });
-      if (!updated) return reply.code(404).send({ error: "not_found" });
-
-      // If GPS changed (and tagIds wasn't explicitly set in this same request),
-      // resync the plant's location-kind tags from the new GPS. tagIds set
-      // explicitly wins — user choice overrides auto-resolution for this call.
-      if (
-        tagIds === undefined &&
-        (parsed.data.gpsLat !== undefined || parsed.data.gpsLng !== undefined)
-      ) {
-        await syncPlantLocationTags(updated.id, updated.gpsLat, updated.gpsLng);
-        const refreshed = await prisma.plant.findUnique({
-          where: { id: updated.id },
-          include: PLANT_INCLUDE,
-        });
-        if (refreshed) return { plant: publicPlant(refreshed) };
-      }
-      return { plant: publicPlant(updated) };
-    },
-  );
+      if (refreshed) return { plant: publicPlant(refreshed, req.role) };
+    }
+    return { plant: publicPlant(updated, req.role) };
+  });
 
   // Reset clears every editable field on a plant (and its photos/actions)
   // so the QR code can be reused for a different physical plant. The plant
@@ -177,11 +193,11 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
   // species, description, notes, GPS, tags, and plantNetData are wiped.
   app.post<{ Params: { id: string } }>(
     "/plants/:id/reset",
-    { onRequest: [app.requireAuth] },
     async (req, reply) => {
+      if (rejectIfReadOnly(req, reply)) return;
       const id = req.params.id;
-      const plant = await prisma.plant.findUnique({
-        where: { id },
+      const plant = await prisma.plant.findFirst({
+        where: { id, siteId: req.site!.id },
         include: { photos: true },
       });
       if (!plant) return reply.code(404).send({ error: "not_found" });
@@ -217,39 +233,35 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
         },
         include: PLANT_INCLUDE,
       });
-      return { plant: publicPlant(reset) };
+      return { plant: publicPlant(reset, req.role) };
     },
   );
 
   // Delete removes the plant entirely. Photos and actions cascade via the
   // schema's onDelete: Cascade; we still need to remove the Spaces objects.
-  app.delete<{ Params: { id: string } }>(
-    "/plants/:id",
-    { onRequest: [app.requireAuth] },
-    async (req, reply) => {
-      const id = req.params.id;
-      const plant = await prisma.plant.findUnique({
-        where: { id },
-        include: { photos: true },
-      });
-      if (!plant) return reply.code(404).send({ error: "not_found" });
+  app.delete<{ Params: { id: string } }>("/plants/:id", async (req, reply) => {
+    if (rejectIfReadOnly(req, reply)) return;
+    const id = req.params.id;
+    const plant = await prisma.plant.findFirst({
+      where: { id, siteId: req.site!.id },
+      include: { photos: true },
+    });
+    if (!plant) return reply.code(404).send({ error: "not_found" });
 
-      // Break cover-photo back-reference before deleting plant.
-      await prisma.plant.update({
-        where: { id },
-        data: { coverPhotoId: null },
-      });
-      await prisma.plant.delete({ where: { id } });
-      await Promise.all(
-        plant.photos.map((p) =>
-          deletePhotoObjects({
-            original: p.originalPath,
-            thumb: p.thumbnailPath,
-            cover: p.coverPath,
-          }),
-        ),
-      );
-      return { ok: true };
-    },
-  );
+    await prisma.plant.update({
+      where: { id },
+      data: { coverPhotoId: null },
+    });
+    await prisma.plant.delete({ where: { id } });
+    await Promise.all(
+      plant.photos.map((p) =>
+        deletePhotoObjects({
+          original: p.originalPath,
+          thumb: p.thumbnailPath,
+          cover: p.coverPath,
+        }),
+      ),
+    );
+    return { ok: true };
+  });
 };

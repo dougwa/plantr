@@ -12,17 +12,19 @@ export function tagNameForShape(shapeId: string, shapeName: string | null): stri
   return `Location ${shapeId.slice(-6)}`;
 }
 
-// Returns `candidate` if no other location tag holds that name; otherwise
-// appends a shape-id suffix to disambiguate. Used by shape create/rename so a
-// collision between two same-named shapes doesn't break the (kind, name)
-// unique constraint.
+// Returns `candidate` if no other location tag in the same site holds that
+// name; otherwise appends a shape-id suffix to disambiguate. Used by shape
+// create/rename so a collision between two same-named shapes inside a site
+// doesn't break the (siteId, kind, name) unique constraint.
 async function uniqueLocationTagName(
   tx: Tx,
+  siteId: string,
   candidate: string,
   shapeId: string,
 ): Promise<string> {
   const clash = await tx.tag.findFirst({
     where: {
+      siteId,
       kind: "location",
       name: candidate,
       NOT: { locationShapeId: shapeId },
@@ -36,10 +38,11 @@ async function uniqueLocationTagName(
 // Create the paired location tag for a freshly created shape.
 export async function createLocationTagForShape(
   tx: Tx,
-  shape: { id: string; name: string | null },
+  shape: { id: string; name: string | null; siteId: string },
 ): Promise<void> {
   const name = await uniqueLocationTagName(
     tx,
+    shape.siteId,
     tagNameForShape(shape.id, shape.name),
     shape.id,
   );
@@ -48,6 +51,7 @@ export async function createLocationTagForShape(
       name,
       kind: "location",
       locationShapeId: shape.id,
+      siteId: shape.siteId,
     },
   });
 }
@@ -55,10 +59,11 @@ export async function createLocationTagForShape(
 // Sync the paired location tag's name to match a (possibly renamed) shape.
 export async function syncLocationTagName(
   tx: Tx,
-  shape: { id: string; name: string | null },
+  shape: { id: string; name: string | null; siteId: string },
 ): Promise<void> {
   const desired = await uniqueLocationTagName(
     tx,
+    shape.siteId,
     tagNameForShape(shape.id, shape.name),
     shape.id,
   );
@@ -68,14 +73,16 @@ export async function syncLocationTagName(
   });
 }
 
-// Returns the set of location-tag ids whose shape contains the given point.
+// Returns the set of location-tag ids (within the given site) whose shape
+// contains the given point.
 export async function resolveLocationTagIdsForPoint(
+  siteId: string,
   lat: number | null,
   lng: number | null,
 ): Promise<string[]> {
   if (lat == null || lng == null) return [];
   const tags = await prisma.tag.findMany({
-    where: { kind: "location" },
+    where: { siteId, kind: "location" },
     include: { locationShape: true },
   });
   const ids: string[] = [];
@@ -95,12 +102,12 @@ export async function syncPlantLocationTags(
   lat: number | null,
   lng: number | null,
 ): Promise<void> {
-  const desired = new Set(await resolveLocationTagIdsForPoint(lat, lng));
   const plant = await prisma.plant.findUnique({
     where: { id: plantId },
-    select: { tags: { select: { id: true, kind: true } } },
+    select: { siteId: true, tags: { select: { id: true, kind: true } } },
   });
   if (!plant) return;
+  const desired = new Set(await resolveLocationTagIdsForPoint(plant.siteId, lat, lng));
   const currentLoc = plant.tags.filter((t) => t.kind === "location").map((t) => t.id);
   const sameSet =
     currentLoc.length === desired.size && currentLoc.every((id) => desired.has(id));
@@ -113,11 +120,11 @@ export async function syncPlantLocationTags(
   });
 }
 
-// After a shape's geometry changes, every plant with GPS may have moved in or
-// out of it. Re-sync everyone with GPS to the new world.
-export async function reassignPlantsAfterShapeChange(): Promise<void> {
+// After a shape's geometry changes, every plant in the same site with GPS may
+// have moved in or out of it. Re-sync everyone with GPS to the new world.
+export async function reassignPlantsAfterShapeChange(siteId: string): Promise<void> {
   const plants = await prisma.plant.findMany({
-    where: { gpsLat: { not: null }, gpsLng: { not: null } },
+    where: { siteId, gpsLat: { not: null }, gpsLng: { not: null } },
     select: { id: true, gpsLat: true, gpsLng: true },
   });
   for (const p of plants) {

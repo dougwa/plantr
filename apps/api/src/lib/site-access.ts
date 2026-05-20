@@ -12,6 +12,14 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { MembershipRole, type Site, type Membership } from "@prisma/client";
 import { prisma } from "../db.js";
 
+declare module "fastify" {
+  interface FastifyRequest {
+    site: Site | null;
+    membership: Membership | null;
+    role: EffectiveRole;
+  }
+}
+
 export type EffectiveRole = MembershipRole | "ANON";
 
 export const RoleRank: Record<EffectiveRole, number> = {
@@ -91,4 +99,22 @@ export function canManageSite(role: EffectiveRole): boolean {
   // Updates to site name/address are Owner/Admin; visibility flip is Owner-only
   // (enforced at the route level).
   return role === "OWNER" || role === "ADMIN";
+}
+
+// User-level write (create/edit/delete plants, photos, actions, tags, shapes).
+// Viewer and Anon are read-only.
+export function canWrite(role: EffectiveRole): boolean {
+  return role === "OWNER" || role === "ADMIN" || role === "USER";
+}
+
+/**
+ * Reject the request if the caller can't write. Returns true when a reply was
+ * sent — caller should `return` immediately.
+ */
+export function rejectIfReadOnly(req: FastifyRequest, reply: FastifyReply): boolean {
+  if (!canWrite(req.role)) {
+    reply.code(403).send({ error: "insufficient_role" });
+    return true;
+  }
+  return false;
 }

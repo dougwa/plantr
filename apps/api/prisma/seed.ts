@@ -1,46 +1,62 @@
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, MembershipRole, Visibility } from "@prisma/client";
 import argon2 from "argon2";
 
 const prisma = new PrismaClient();
 
-const DEFAULT_TAGS: { name: string; color: string }[] = [
-  { name: "Rose", color: "#ec4899" },
-  { name: "Hydrangea", color: "#0ea5e9" },
-  { name: "Rhododendron", color: "#a855f7" },
-  { name: "Flowering Tree", color: "#16a34a" },
-  { name: "Fruit Tree", color: "#f97316" },
-  { name: "Indoor Orchid", color: "#eab308" },
-  { name: "Outdoor Orchid", color: "#dc2626" },
-  { name: "Other", color: "#525252" },
+const DEFAULT_TAG_NAMES = [
+  "Rose",
+  "Hydrangea",
+  "Rhododendron",
+  "Flowering Tree",
+  "Fruit Tree",
+  "Indoor Orchid",
+  "Outdoor Orchid",
+  "Other",
 ];
 
-async function seedAdmin() {
-  const existing = await prisma.user.findUnique({ where: { username: "admin" } });
-  if (existing) {
+async function seedAdminAndSite() {
+  let user = await prisma.user.findUnique({ where: { username: "admin" } });
+  if (!user) {
+    const passwordHash = await argon2.hash("admin");
+    user = await prisma.user.create({
+      data: {
+        username: "admin",
+        email: "admin@local",
+        passwordHash,
+        mustChangePass: true,
+      },
+    });
+    console.log("seeded admin/admin (mustChangePass=true, email=admin@local)");
+  } else {
     console.log("admin user already exists, skipping");
-    return;
   }
-  const passwordHash = await argon2.hash("admin");
-  await prisma.user.create({
-    data: { username: "admin", passwordHash, mustChangePass: true },
+
+  const ownedSite = await prisma.site.findFirst({ where: { ownerId: user.id } });
+  if (ownedSite) return ownedSite;
+  const site = await prisma.site.create({
+    data: { name: "My Garden", visibility: Visibility.PRIVATE, ownerId: user.id },
   });
-  console.log("seeded admin/admin (mustChangePass=true)");
+  await prisma.membership.create({
+    data: { siteId: site.id, userId: user.id, role: MembershipRole.OWNER },
+  });
+  console.log(`seeded site ${site.id} (My Garden) for admin`);
+  return site;
 }
 
-async function seedTags() {
-  for (const { name, color } of DEFAULT_TAGS) {
+async function seedTags(siteId: string) {
+  for (const name of DEFAULT_TAG_NAMES) {
     await prisma.tag.upsert({
-      where: { name },
+      where: { siteId_kind_name: { siteId, kind: "custom", name } },
       update: {},
-      create: { name, color },
+      create: { name, kind: "custom", siteId },
     });
   }
-  console.log(`seeded ${DEFAULT_TAGS.length} tags`);
+  console.log(`seeded ${DEFAULT_TAG_NAMES.length} tags into site ${siteId}`);
 }
 
 async function main() {
-  await seedAdmin();
-  await seedTags();
+  const site = await seedAdminAndSite();
+  await seedTags(site.id);
 }
 
 main()

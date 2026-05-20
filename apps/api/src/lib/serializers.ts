@@ -1,4 +1,5 @@
 import type { Action, ActionKind, Photo, Plant, Tag, TagKind, User } from "@prisma/client";
+import type { EffectiveRole } from "./site-access.js";
 import { signedUrlsFor } from "./photos.js";
 
 export type PublicPhoto = {
@@ -58,6 +59,12 @@ type PlantWithRelations = Plant & {
   createdBy: Pick<User, "id" | "username">;
 };
 
+// Viewer/Anon roles only see plant identity + photos. Treatment logs (actions)
+// and free-text notes are hidden — that's the contract for public sites.
+export function isReadOnlyRole(role: EffectiveRole): boolean {
+  return role === "VIEWER" || role === "ANON";
+}
+
 export function publicTag(t: Tag): PublicTag {
   return {
     id: t.id,
@@ -92,7 +99,11 @@ export function publicAction(action: ActionWithCreator): PublicAction {
   };
 }
 
-export function publicPlant(plant: PlantWithRelations): PublicPlant {
+export function publicPlant(
+  plant: PlantWithRelations,
+  role: EffectiveRole = "OWNER",
+): PublicPlant {
+  const hideSensitive = isReadOnlyRole(role);
   return {
     id: plant.id,
     qrCode: plant.qrCode,
@@ -100,13 +111,13 @@ export function publicPlant(plant: PlantWithRelations): PublicPlant {
     tags: plant.tags.map(publicTag),
     species: plant.species,
     description: plant.description,
-    notes: plant.notes,
+    notes: hideSensitive ? null : plant.notes,
     gpsLat: plant.gpsLat,
     gpsLng: plant.gpsLng,
     plantNetData: plant.plantNetData,
     coverPhoto: plant.coverPhoto ? publicPhoto(plant.coverPhoto) : null,
     photos: plant.photos.map(publicPhoto),
-    actions: plant.actions.map(publicAction),
+    actions: hideSensitive ? [] : plant.actions.map(publicAction),
     createdBy: { id: plant.createdBy.id, username: plant.createdBy.username },
     createdAt: plant.createdAt,
     updatedAt: plant.updatedAt,

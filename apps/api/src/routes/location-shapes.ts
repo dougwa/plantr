@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { qrCodeSchema } from "../lib/qr-code.js";
+import { rejectIfReadOnly } from "../lib/site-access.js";
 import {
   createLocationTagForShape,
   reassignPlantsAfterShapeChange,
@@ -71,17 +72,22 @@ export function toPublicShape(s: {
 }
 
 export const locationShapeRoutes: FastifyPluginAsync = async (app) => {
-  app.get("/location-shapes", { onRequest: [app.requireAuth] }, async () => {
-    const shapes = await prisma.locationShape.findMany({ orderBy: { createdAt: "asc" } });
+  app.get("/location-shapes", async (req) => {
+    const shapes = await prisma.locationShape.findMany({
+      where: { siteId: req.site!.id },
+      orderBy: { createdAt: "asc" },
+    });
     return { shapes: shapes.map(toPublicShape) };
   });
 
-  app.post("/location-shapes", { onRequest: [app.requireAuth] }, async (req, reply) => {
+  app.post("/location-shapes", async (req, reply) => {
+    if (rejectIfReadOnly(req, reply)) return;
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: "invalid_request", details: parsed.error.flatten() });
     }
     const data = parsed.data;
+    const siteId = req.site!.id;
     const shape = await prisma.$transaction(async (tx) => {
       const s = await tx.locationShape.create({
         data: {
@@ -95,77 +101,76 @@ export const locationShapeRoutes: FastifyPluginAsync = async (app) => {
           rotationDegrees: data.rotationDegrees ?? 0,
           locked: data.locked ?? false,
           polygonPoints: data.polygonPoints ?? undefined,
+          siteId,
           createdById: req.user!.id,
         },
       });
       await createLocationTagForShape(tx, s);
       return s;
     });
-    await reassignPlantsAfterShapeChange();
+    await reassignPlantsAfterShapeChange(siteId);
     return reply.code(201).send({ shape: toPublicShape(shape) });
   });
 
   app.patch<{ Params: { id: string } }>(
     "/location-shapes/:id",
-    { onRequest: [app.requireAuth] },
     async (req, reply) => {
+      if (rejectIfReadOnly(req, reply)) return;
       const parsed = patchSchema.safeParse(req.body);
       if (!parsed.success) {
         return reply.code(400).send({ error: "invalid_request" });
       }
+      const siteId = req.site!.id;
       const data = parsed.data;
+
+      const current = await prisma.locationShape.findFirst({
+        where: { id: req.params.id, siteId },
+        select: { id: true, qrCode: true },
+      });
+      if (!current) return reply.code(404).send({ error: "not_found" });
+
       if (data.qrCode !== undefined) {
-        const current = await prisma.locationShape.findUnique({
-          where: { id: req.params.id },
-          select: { qrCode: true },
-        });
-        if (!current) return reply.code(404).send({ error: "not_found" });
         if (current.qrCode !== null) {
           return reply.code(409).send({ error: "qr_code_locked" });
         }
         const taken = await prisma.locationShape.findUnique({
-          where: { qrCode: data.qrCode },
+          where: { siteId_qrCode: { siteId, qrCode: data.qrCode } },
           select: { id: true },
         });
         if (taken) return reply.code(409).send({ error: "qr_code_taken" });
         const plantTaken = await prisma.plant.findUnique({
-          where: { qrCode: data.qrCode },
+          where: { siteId_qrCode: { siteId, qrCode: data.qrCode } },
           select: { id: true },
         });
         if (plantTaken) return reply.code(409).send({ error: "qr_code_taken" });
       }
       const updated = await prisma.$transaction(async (tx) => {
-        const u = await tx.locationShape
-          .update({ where: { id: req.params.id }, data })
-          .catch((err: { code?: string }) => {
-            if (err.code === "P2025") return null;
-            throw err;
-          });
-        if (!u) return null;
+        const u = await tx.locationShape.update({
+          where: { id: req.params.id },
+          data,
+        });
         if (data.name !== undefined) {
           await syncLocationTagName(tx, u);
         }
         return u;
       });
-      if (!updated) return reply.code(404).send({ error: "not_found" });
-      await reassignPlantsAfterShapeChange();
+      await reassignPlantsAfterShapeChange(siteId);
       return { shape: toPublicShape(updated) };
     },
   );
 
   app.delete<{ Params: { id: string } }>(
     "/location-shapes/:id",
-    { onRequest: [app.requireAuth] },
     async (req, reply) => {
+      if (rejectIfReadOnly(req, reply)) return;
+      const target = await prisma.locationShape.findFirst({
+        where: { id: req.params.id, siteId: req.site!.id },
+        select: { id: true },
+      });
+      if (!target) return reply.code(404).send({ error: "not_found" });
       // The paired Tag (kind=location) and its M:M rows cascade via the FK on
       // Tag.locationShapeId; no extra cleanup needed here.
-      const result = await prisma.locationShape
-        .delete({ where: { id: req.params.id } })
-        .catch((err: { code?: string }) => {
-          if (err.code === "P2025") return null;
-          throw err;
-        });
-      if (!result) return reply.code(404).send({ error: "not_found" });
+      await prisma.locationShape.delete({ where: { id: req.params.id } });
       return { ok: true };
     },
   );

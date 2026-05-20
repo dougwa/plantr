@@ -87,6 +87,53 @@ async function request<T>(
   return { ok: true, data };
 }
 
+// --- current-site context ---------------------------------------------------
+//
+// Every tenanted endpoint now lives under /sites/:siteId/*. We keep the "which
+// site am I in?" state at module scope so individual screens don't need to
+// thread it through every call — AuthContext is responsible for keeping this
+// in sync (set after login/refresh, clear on signOut). Phase 5 wires the
+// site selector to call setCurrentSiteId.
+
+let currentSiteId: string | null = null;
+
+export function setCurrentSiteId(id: string | null): void {
+  currentSiteId = id;
+}
+
+export function getCurrentSiteId(): string | null {
+  return currentSiteId;
+}
+
+function sitePath(suffix: string): string {
+  if (!currentSiteId) {
+    throw new Error("no_site_selected");
+  }
+  return `/sites/${encodeURIComponent(currentSiteId)}${suffix}`;
+}
+
+// --- sites ------------------------------------------------------------------
+
+export type SiteRole = "OWNER" | "ADMIN" | "USER" | "VIEWER";
+
+export type SiteSummary = {
+  id: string;
+  name: string;
+  address: string | null;
+  lat: number | null;
+  lng: number | null;
+  visibility: "PUBLIC" | "PRIVATE";
+  deletedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  owner: { id: string; username: string; name: string | null };
+  role: SiteRole;
+};
+
+export async function listSites(token: string) {
+  return request<{ sites: SiteSummary[] }>("/sites", { method: "GET", token });
+}
+
 // --- auth -------------------------------------------------------------------
 
 export async function login(identifier: string, password: string) {
@@ -160,11 +207,11 @@ export async function logout(token: string): Promise<void> {
 // --- tags -------------------------------------------------------------------
 
 export async function listTags(token: string) {
-  return request<{ tags: Tag[] }>("/tags", { method: "GET", token });
+  return request<{ tags: Tag[] }>(sitePath("/tags"), { method: "GET", token });
 }
 
 export async function createTag(token: string, body: { name: string }) {
-  return request<{ tag: Tag }>("/tags", {
+  return request<{ tag: Tag }>(sitePath("/tags"), {
     method: "POST",
     body: JSON.stringify(body),
     token,
@@ -176,7 +223,7 @@ export async function updateTag(
   id: string,
   body: { name?: string },
 ) {
-  return request<{ tag: Tag }>(`/tags/${id}`, {
+  return request<{ tag: Tag }>(sitePath(`/tags/${id}`), {
     method: "PATCH",
     body: JSON.stringify(body),
     token,
@@ -184,16 +231,16 @@ export async function updateTag(
 }
 
 export async function deleteTag(token: string, id: string) {
-  return request<{ ok: boolean }>(`/tags/${id}`, { method: "DELETE", token });
+  return request<{ ok: boolean }>(sitePath(`/tags/${id}`), { method: "DELETE", token });
 }
 
 // --- plants -----------------------------------------------------------------
 
 export async function getPlantByQr(token: string, code: string) {
-  return request<{ plant: PublicPlant }>(`/plants/by-qr/${encodeURIComponent(code)}`, {
-    method: "GET",
-    token,
-  });
+  return request<{ plant: PublicPlant }>(
+    sitePath(`/plants/by-qr/${encodeURIComponent(code)}`),
+    { method: "GET", token },
+  );
 }
 
 export type CodeLookup =
@@ -201,7 +248,7 @@ export type CodeLookup =
   | { type: "shape"; shape: LocationShape };
 
 export async function lookupCode(token: string, code: string) {
-  return request<CodeLookup>(`/codes/by-qr/${encodeURIComponent(code)}`, {
+  return request<CodeLookup>(sitePath(`/codes/by-qr/${encodeURIComponent(code)}`), {
     method: "GET",
     token,
   });
@@ -211,7 +258,7 @@ export async function createPlant(
   token: string,
   body: { qrCode: string; gpsLat?: number; gpsLng?: number },
 ) {
-  return request<{ plant: PublicPlant }>("/plants", {
+  return request<{ plant: PublicPlant }>(sitePath("/plants"), {
     method: "POST",
     body: JSON.stringify(body),
     token,
@@ -219,7 +266,10 @@ export async function createPlant(
 }
 
 export async function getPlant(token: string, id: string) {
-  return request<{ plant: PublicPlant }>(`/plants/${id}`, { method: "GET", token });
+  return request<{ plant: PublicPlant }>(sitePath(`/plants/${id}`), {
+    method: "GET",
+    token,
+  });
 }
 
 export async function patchPlant(
@@ -235,7 +285,7 @@ export async function patchPlant(
     gpsLng: number | null;
   }>,
 ) {
-  return request<{ plant: PublicPlant }>(`/plants/${id}`, {
+  return request<{ plant: PublicPlant }>(sitePath(`/plants/${id}`), {
     method: "PATCH",
     body: JSON.stringify(patch),
     token,
@@ -243,14 +293,14 @@ export async function patchPlant(
 }
 
 export async function resetPlant(token: string, id: string) {
-  return request<{ plant: PublicPlant }>(`/plants/${id}/reset`, {
+  return request<{ plant: PublicPlant }>(sitePath(`/plants/${id}/reset`), {
     method: "POST",
     token,
   });
 }
 
 export async function deletePlant(token: string, id: string) {
-  return request<{ ok: boolean }>(`/plants/${id}`, {
+  return request<{ ok: boolean }>(sitePath(`/plants/${id}`), {
     method: "DELETE",
     token,
   });
@@ -265,7 +315,7 @@ export async function uploadPhoto(token: string, plantId: string, fileUri: strin
     name: "photo.jpg",
     type: "image/jpeg",
   } as unknown as Blob);
-  return request<{ photo: PublicPhoto }>(`/plants/${plantId}/photos`, {
+  return request<{ photo: PublicPhoto }>(sitePath(`/plants/${plantId}/photos`), {
     method: "POST",
     body: form,
     token,
@@ -273,7 +323,7 @@ export async function uploadPhoto(token: string, plantId: string, fileUri: strin
 }
 
 export async function setCoverPhoto(token: string, photoId: string) {
-  return request<{ plant: PublicPlant }>(`/photos/${photoId}`, {
+  return request<{ plant: PublicPlant }>(sitePath(`/photos/${photoId}`), {
     method: "PATCH",
     body: JSON.stringify({ setCover: true }),
     token,
@@ -281,7 +331,10 @@ export async function setCoverPhoto(token: string, photoId: string) {
 }
 
 export async function deletePhoto(token: string, photoId: string) {
-  return request<{ ok: boolean }>(`/photos/${photoId}`, { method: "DELETE", token });
+  return request<{ ok: boolean }>(sitePath(`/photos/${photoId}`), {
+    method: "DELETE",
+    token,
+  });
 }
 
 // --- actions ----------------------------------------------------------------
@@ -291,7 +344,7 @@ export async function recordAction(
   plantId: string,
   body: { kind: ActionKind; notes?: string },
 ) {
-  return request<{ action: PublicAction }>(`/plants/${plantId}/actions`, {
+  return request<{ action: PublicAction }>(sitePath(`/plants/${plantId}/actions`), {
     method: "POST",
     body: JSON.stringify(body),
     token,
@@ -303,7 +356,7 @@ export async function patchAction(
   id: string,
   body: { notes: string | null },
 ) {
-  return request<{ action: PublicAction }>(`/actions/${id}`, {
+  return request<{ action: PublicAction }>(sitePath(`/actions/${id}`), {
     method: "PATCH",
     body: JSON.stringify(body),
     token,
@@ -311,7 +364,7 @@ export async function patchAction(
 }
 
 export async function deleteAction(token: string, id: string) {
-  return request<{ ok: boolean }>(`/actions/${id}`, {
+  return request<{ ok: boolean }>(sitePath(`/actions/${id}`), {
     method: "DELETE",
     token,
   });
@@ -331,7 +384,7 @@ export type PlantListItem = {
 };
 
 export async function listPlants(token: string) {
-  return request<{ plants: PlantListItem[] }>("/plants", { method: "GET", token });
+  return request<{ plants: PlantListItem[] }>(sitePath("/plants"), { method: "GET", token });
 }
 
 // --- location shapes --------------------------------------------------------
@@ -354,7 +407,7 @@ export type LocationShape = {
 };
 
 export async function listLocationShapes(token: string) {
-  return request<{ shapes: LocationShape[] }>("/location-shapes", {
+  return request<{ shapes: LocationShape[] }>(sitePath("/location-shapes"), {
     method: "GET",
     token,
   });
@@ -373,7 +426,7 @@ export async function createLocationShape(
     polygonPoints?: Array<{ lat: number; lng: number }>;
   },
 ) {
-  return request<{ shape: LocationShape }>("/location-shapes", {
+  return request<{ shape: LocationShape }>(sitePath("/location-shapes"), {
     method: "POST",
     body: JSON.stringify(body),
     token,
@@ -385,7 +438,7 @@ export async function patchLocationShape(
   id: string,
   patch: Partial<LocationShape>,
 ) {
-  return request<{ shape: LocationShape }>(`/location-shapes/${id}`, {
+  return request<{ shape: LocationShape }>(sitePath(`/location-shapes/${id}`), {
     method: "PATCH",
     body: JSON.stringify(patch),
     token,
@@ -393,7 +446,7 @@ export async function patchLocationShape(
 }
 
 export async function deleteLocationShape(token: string, id: string) {
-  return request<{ ok: boolean }>(`/location-shapes/${id}`, {
+  return request<{ ok: boolean }>(sitePath(`/location-shapes/${id}`), {
     method: "DELETE",
     token,
   });

@@ -6,6 +6,7 @@ import { env } from "./env.js";
 import authPlugin from "./auth/plugin.js";
 import { authRoutes } from "./auth/routes.js";
 import { siteRoutes } from "./routes/sites.js";
+import sitePlugin from "./lib/site-scope.js";
 import { plantRoutes } from "./routes/plants.js";
 import { tagRoutes } from "./routes/tags.js";
 import { photoRoutes } from "./routes/photos.js";
@@ -26,12 +27,23 @@ await app.register(multipart, {
 await app.register(authPlugin);
 await app.register(authRoutes);
 await app.register(siteRoutes);
-await app.register(tagRoutes);
-await app.register(plantRoutes);
-await app.register(photoRoutes);
-await app.register(actionRoutes);
-await app.register(locationShapeRoutes);
-await app.register(codeRoutes);
+
+// Tenant-scoped subtree — every data route lives under /sites/:siteId/* and
+// runs the site-scope preHandler which resolves req.site / req.role from the
+// :siteId path param. Public sites permit anonymous (ANON) viewers; write
+// permission is enforced inside each handler.
+await app.register(
+  async (scoped) => {
+    await scoped.register(sitePlugin);
+    await scoped.register(tagRoutes);
+    await scoped.register(plantRoutes);
+    await scoped.register(photoRoutes);
+    await scoped.register(actionRoutes);
+    await scoped.register(locationShapeRoutes);
+    await scoped.register(codeRoutes);
+  },
+  { prefix: "/sites/:siteId" },
+);
 
 app.get("/health", async () => ({ ok: true, service: "plantr-api" }));
 

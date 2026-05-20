@@ -10,6 +10,7 @@ import {
 } from "../lib/photos.js";
 import { identifyFromBuffer, plantNetEnabled } from "../lib/plantnet.js";
 import { PLANT_INCLUDE, publicPhoto, publicPlant } from "../lib/serializers.js";
+import { rejectIfReadOnly } from "../lib/site-access.js";
 
 const patchSchema = z.object({
   setCover: z.boolean().optional(),
@@ -18,10 +19,12 @@ const patchSchema = z.object({
 export const photoRoutes: FastifyPluginAsync = async (app) => {
   app.post<{ Params: { id: string } }>(
     "/plants/:id/photos",
-    { onRequest: [app.requireAuth] },
     async (req, reply) => {
+      if (rejectIfReadOnly(req, reply)) return;
       const plantId = req.params.id;
-      const plant = await prisma.plant.findUnique({ where: { id: plantId } });
+      const plant = await prisma.plant.findFirst({
+        where: { id: plantId, siteId: req.site!.id },
+      });
       if (!plant) return reply.code(404).send({ error: "not_found" });
 
       const file = await req.file();
@@ -47,6 +50,7 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
           originalPath: keys.original,
           thumbnailPath: keys.thumb,
           coverPath: keys.cover,
+          siteId: req.site!.id,
           createdById: req.user!.id,
         },
         include: { createdBy: { select: { id: true, username: true } } },
@@ -82,51 +86,47 @@ export const photoRoutes: FastifyPluginAsync = async (app) => {
     },
   );
 
-  app.patch<{ Params: { id: string } }>(
-    "/photos/:id",
-    { onRequest: [app.requireAuth] },
-    async (req, reply) => {
-      const parsed = patchSchema.safeParse(req.body);
-      if (!parsed.success) return reply.code(400).send({ error: "invalid_request" });
+  app.patch<{ Params: { id: string } }>("/photos/:id", async (req, reply) => {
+    if (rejectIfReadOnly(req, reply)) return;
+    const parsed = patchSchema.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_request" });
 
-      const photo = await prisma.photo.findUnique({ where: { id: req.params.id } });
-      if (!photo) return reply.code(404).send({ error: "not_found" });
+    const photo = await prisma.photo.findFirst({
+      where: { id: req.params.id, siteId: req.site!.id },
+    });
+    if (!photo) return reply.code(404).send({ error: "not_found" });
 
-      if (parsed.data.setCover) {
-        const plant = await prisma.plant.update({
-          where: { id: photo.plantId },
-          data: { coverPhotoId: photo.id },
-          include: PLANT_INCLUDE,
-        });
-        return { plant: publicPlant(plant) };
-      }
-      return { ok: true };
-    },
-  );
-
-  app.delete<{ Params: { id: string } }>(
-    "/photos/:id",
-    { onRequest: [app.requireAuth] },
-    async (req, reply) => {
-      const photo = await prisma.photo.findUnique({
-        where: { id: req.params.id },
-        include: { coverOf: true },
+    if (parsed.data.setCover) {
+      const plant = await prisma.plant.update({
+        where: { id: photo.plantId },
+        data: { coverPhotoId: photo.id },
+        include: PLANT_INCLUDE,
       });
-      if (!photo) return reply.code(404).send({ error: "not_found" });
+      return { plant: publicPlant(plant, req.role) };
+    }
+    return { ok: true };
+  });
 
-      if (photo.coverOf) {
-        await prisma.plant.update({
-          where: { id: photo.coverOf.id },
-          data: { coverPhotoId: null },
-        });
-      }
-      await prisma.photo.delete({ where: { id: photo.id } });
-      await deletePhotoObjects({
-        original: photo.originalPath,
-        thumb: photo.thumbnailPath,
-        cover: photo.coverPath,
+  app.delete<{ Params: { id: string } }>("/photos/:id", async (req, reply) => {
+    if (rejectIfReadOnly(req, reply)) return;
+    const photo = await prisma.photo.findFirst({
+      where: { id: req.params.id, siteId: req.site!.id },
+      include: { coverOf: true },
+    });
+    if (!photo) return reply.code(404).send({ error: "not_found" });
+
+    if (photo.coverOf) {
+      await prisma.plant.update({
+        where: { id: photo.coverOf.id },
+        data: { coverPhotoId: null },
       });
-      return { ok: true };
-    },
-  );
+    }
+    await prisma.photo.delete({ where: { id: photo.id } });
+    await deletePhotoObjects({
+      original: photo.originalPath,
+      thumb: photo.thumbnailPath,
+      cover: photo.coverPath,
+    });
+    return { ok: true };
+  });
 };

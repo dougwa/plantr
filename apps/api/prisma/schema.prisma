@@ -180,18 +180,18 @@ model Tag {
   kind            TagKind        @default(custom)
   locationShapeId String?        @unique
   locationShape   LocationShape? @relation(fields: [locationShapeId], references: [id], onDelete: Cascade)
-  siteId          String?
-  site            Site?          @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId          String
+  site            Site           @relation(fields: [siteId], references: [id], onDelete: Cascade)
   createdAt       DateTime       @default(now())
   plants          Plant[]
 
-  @@unique([kind, name])
+  @@unique([siteId, kind, name])
   @@index([siteId])
 }
 
 model Plant {
   id           String   @id @default(cuid())
-  qrCode       String   @unique
+  qrCode       String
   name         String?
   species      String?
   description  String?
@@ -201,8 +201,8 @@ model Plant {
   gpsLat       Float?
   gpsLng       Float?
   plantNetData Json?
-  siteId       String?
-  site         Site?    @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId       String
+  site         Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
   createdById  String
   createdBy    User     @relation(fields: [createdById], references: [id])
   createdAt    DateTime @default(now())
@@ -212,6 +212,9 @@ model Plant {
   // Plant-to-location relationship lives in `tags` via location-kind Tags.
   tags         Tag[]
 
+  // QR codes are unique within a site only — two unrelated sites may carry
+  // the same printed sticker.
+  @@unique([siteId, qrCode])
   @@index([siteId])
 }
 
@@ -222,8 +225,8 @@ model Photo {
   originalPath  String
   thumbnailPath String
   coverPath     String
-  siteId        String?
-  site          Site?    @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId        String
+  site          Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
   createdById   String
   createdBy     User     @relation(fields: [createdById], references: [id])
   createdAt     DateTime @default(now())
@@ -240,8 +243,8 @@ model Action {
   kind        ActionKind
   notes       String?
   takenAt     DateTime
-  siteId      String?
-  site        Site?      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId      String
+  site        Site       @relation(fields: [siteId], references: [id], onDelete: Cascade)
   createdById String
   createdBy   User       @relation(fields: [createdById], references: [id])
   createdAt   DateTime   @default(now())
@@ -252,7 +255,7 @@ model Action {
 
 model LocationShape {
   id              String   @id @default(cuid())
-  qrCode          String?  @unique
+  qrCode          String?
   name            String?
   kind            String
   color           String
@@ -263,8 +266,8 @@ model LocationShape {
   rotationDegrees Float    @default(0)
   locked          Boolean  @default(false)
   polygonPoints   Json?
-  siteId          String?
-  site            Site?    @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  siteId          String
+  site            Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
   createdById     String
   createdBy       User     @relation(fields: [createdById], references: [id])
   createdAt       DateTime @default(now())
@@ -273,5 +276,8 @@ model LocationShape {
   // via Plant.tags.
   tag             Tag?
 
+  // QR codes are unique within a site only. Two shapes in the same site can
+  // still both be unbound (qrCode NULL is treated as distinct in Postgres).
+  @@unique([siteId, qrCode])
   @@index([siteId])
 }

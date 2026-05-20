@@ -1,4 +1,5 @@
 export const SESSION_COOKIE = "plantr_session";
+export const SITE_COOKIE = "plantr_site";
 
 const SERVER_API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
@@ -82,6 +83,20 @@ export type LocationShape = {
   updatedAt: string;
 };
 
+export type SiteSummary = {
+  id: string;
+  name: string;
+  address: string | null;
+  lat: number | null;
+  lng: number | null;
+  visibility: "PUBLIC" | "PRIVATE";
+  deletedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  owner: { id: string; username: string; name: string | null };
+  role: "OWNER" | "ADMIN" | "USER" | "VIEWER";
+};
+
 async function apiFetch<T>(path: string, cookieHeader: string | undefined): Promise<T | null> {
   if (!cookieHeader) return null;
   try {
@@ -97,30 +112,54 @@ async function apiFetch<T>(path: string, cookieHeader: string | undefined): Prom
   }
 }
 
+// Encoded path segment for a siteId in URLs.
+function siteSeg(siteId: string): string {
+  return `/sites/${encodeURIComponent(siteId)}`;
+}
+
 export async function fetchMeServerSide(cookieHeader: string | undefined): Promise<AuthUser | null> {
   const data = await apiFetch<{ user: AuthUser }>("/auth/me", cookieHeader);
   return data?.user ?? null;
 }
 
+export async function fetchSitesServerSide(
+  cookieHeader: string | undefined,
+): Promise<SiteSummary[]> {
+  const data = await apiFetch<{ sites: SiteSummary[] }>("/sites", cookieHeader);
+  return data?.sites ?? [];
+}
+
 export async function fetchPlantServerSide(
+  siteId: string,
   id: string,
   cookieHeader: string | undefined,
 ): Promise<PublicPlant | null> {
-  const data = await apiFetch<{ plant: PublicPlant }>(`/plants/${id}`, cookieHeader);
+  const data = await apiFetch<{ plant: PublicPlant }>(
+    `${siteSeg(siteId)}/plants/${id}`,
+    cookieHeader,
+  );
   return data?.plant ?? null;
 }
 
 export async function fetchPlantsServerSide(
+  siteId: string,
   cookieHeader: string | undefined,
 ): Promise<PlantListItem[]> {
-  const data = await apiFetch<{ plants: PlantListItem[] }>("/plants", cookieHeader);
+  const data = await apiFetch<{ plants: PlantListItem[] }>(
+    `${siteSeg(siteId)}/plants`,
+    cookieHeader,
+  );
   return data?.plants ?? [];
 }
 
 export async function fetchLocationShapesServerSide(
+  siteId: string,
   cookieHeader: string | undefined,
 ): Promise<LocationShape[]> {
-  const data = await apiFetch<{ shapes: LocationShape[] }>("/location-shapes", cookieHeader);
+  const data = await apiFetch<{ shapes: LocationShape[] }>(
+    `${siteSeg(siteId)}/location-shapes`,
+    cookieHeader,
+  );
   return data?.shapes ?? [];
 }
 

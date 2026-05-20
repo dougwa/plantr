@@ -1,8 +1,10 @@
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import Link from "next/link";
 import {
   fetchLocationShapesServerSide,
   fetchPlantsServerSide,
+  SITE_COOKIE,
 } from "@/lib/api";
 import MapClient from "./MapClient";
 
@@ -14,9 +16,12 @@ export default async function MapPage() {
     .getAll()
     .map((c) => `${c.name}=${c.value}`)
     .join("; ");
+  const siteId = cookieStore.get(SITE_COOKIE)?.value;
+  if (!siteId) redirect("/");
+
   const [plants, shapes] = await Promise.all([
-    fetchPlantsServerSide(cookieHeader),
-    fetchLocationShapesServerSide(cookieHeader),
+    fetchPlantsServerSide(siteId, cookieHeader),
+    fetchLocationShapesServerSide(siteId, cookieHeader),
   ]);
 
   const mapboxToken = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? null;
