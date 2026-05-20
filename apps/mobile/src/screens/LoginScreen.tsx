@@ -12,31 +12,72 @@ import {
 import * as AppleAuthentication from "expo-apple-authentication";
 import { useAuth } from "../contexts/AuthContext";
 import {
+  isAppleOauthEnabled,
   isAppleSignInAvailable,
+  isGoogleOauthConfigured,
   signInWithApple,
   useGoogleAuth,
 } from "../lib/oauth";
 
 type Mode = "signin" | "signup";
 
-export default function LoginScreen() {
-  const { signIn, signUp, signInWithAppleToken, signInWithGoogleToken } = useAuth();
-  const [mode, setMode] = useState<Mode>("signin");
-  const [identifier, setIdentifier] = useState("");
-  const [password, setPassword] = useState("");
-  const [name, setName] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [appleAvailable, setAppleAvailable] = useState(false);
-  const [googleRequest, googleResponse, googlePrompt] = useGoogleAuth();
+type OAuthCommonProps = {
+  busy: boolean;
+  setBusy: (v: boolean) => void;
+  setError: (v: string | null) => void;
+};
+
+// Both OAuth subcomponents own their own hook calls. The parent only mounts
+// them when the corresponding provider is configured — keeps the underlying
+// native modules / expo-auth-session out of the React tree when unused.
+
+function AppleSignInBlock({ mode, busy, setBusy, setError }: OAuthCommonProps & { mode: Mode }) {
+  const { signInWithAppleToken } = useAuth();
+  const [available, setAvailable] = useState(false);
 
   useEffect(() => {
-    isAppleSignInAvailable().then(setAppleAvailable);
+    isAppleSignInAvailable().then(setAvailable);
   }, []);
 
+  if (!available) return null;
+
+  async function onPress() {
+    setError(null);
+    try {
+      setBusy(true);
+      const result = await signInWithApple();
+      const r = await signInWithAppleToken(result.identityToken, result.fullName);
+      if (!r.ok) setError(translateError(r.error));
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code !== "ERR_REQUEST_CANCELED") setError("Apple sign-in failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <AppleAuthentication.AppleAuthenticationButton
+      buttonType={
+        mode === "signin"
+          ? AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN
+          : AppleAuthentication.AppleAuthenticationButtonType.SIGN_UP
+      }
+      buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+      cornerRadius={6}
+      style={styles.appleButton}
+      onPress={onPress}
+    />
+  );
+}
+
+function GoogleSignInBlock({ busy, setBusy, setError }: OAuthCommonProps) {
+  const { signInWithGoogleToken } = useAuth();
+  const [request, response, promptAsync] = useGoogleAuth();
+
   useEffect(() => {
-    if (googleResponse?.type === "success") {
-      const idToken = googleResponse.authentication?.idToken;
+    if (response?.type === "success") {
+      const idToken = response.authentication?.idToken;
       if (!idToken) {
         setError("Google sign-in did not return an id token.");
         return;
@@ -47,10 +88,36 @@ export default function LoginScreen() {
         setBusy(false);
         if (!r.ok) setError(translateError(r.error));
       })();
-    } else if (googleResponse?.type === "error") {
+    } else if (response?.type === "error") {
       setError("Google sign-in failed.");
     }
-  }, [googleResponse, signInWithGoogleToken]);
+  }, [response, signInWithGoogleToken, setBusy, setError]);
+
+  return (
+    <TouchableOpacity
+      onPress={() => promptAsync()}
+      disabled={busy || !request}
+      style={[styles.googleButton, (!request || busy) && styles.busy]}
+    >
+      <Text style={styles.googleText}>Continue with Google</Text>
+    </TouchableOpacity>
+  );
+}
+
+export default function LoginScreen() {
+  const { signIn, signUp } = useAuth();
+  const [mode, setMode] = useState<Mode>("signin");
+  const [identifier, setIdentifier] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  // Module-load-time configuration. Flipping a flag in app.json + reloading
+  // the app is enough to re-enable a provider.
+  const appleEnabled = isAppleOauthEnabled();
+  const googleEnabled = isGoogleOauthConfigured();
+  const anyOAuth = appleEnabled || googleEnabled;
 
   async function onSubmit() {
     setError(null);
@@ -73,23 +140,6 @@ export default function LoginScreen() {
     const r = await signIn(identifier.trim(), password);
     setBusy(false);
     if (!r.ok) setError(translateError(r.error));
-  }
-
-  async function onApple() {
-    setError(null);
-    try {
-      setBusy(true);
-      const result = await signInWithApple();
-      const r = await signInWithAppleToken(result.identityToken, result.fullName);
-      if (!r.ok) setError(translateError(r.error));
-    } catch (err) {
-      const code = (err as { code?: string }).code;
-      if (code !== "ERR_REQUEST_CANCELED") {
-        setError("Apple sign-in failed.");
-      }
-    } finally {
-      setBusy(false);
-    }
   }
 
   return (
@@ -165,33 +215,20 @@ export default function LoginScreen() {
           </Text>
         </TouchableOpacity>
 
-        <View style={styles.divider}>
-          <View style={styles.dividerLine} />
-          <Text style={styles.dividerText}>or</Text>
-          <View style={styles.dividerLine} />
-        </View>
-
-        {appleAvailable && (
-          <AppleAuthentication.AppleAuthenticationButton
-            buttonType={
-              mode === "signin"
-                ? AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN
-                : AppleAuthentication.AppleAuthenticationButtonType.SIGN_UP
-            }
-            buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
-            cornerRadius={6}
-            style={styles.appleButton}
-            onPress={onApple}
-          />
+        {anyOAuth && (
+          <View style={styles.divider}>
+            <View style={styles.dividerLine} />
+            <Text style={styles.dividerText}>or</Text>
+            <View style={styles.dividerLine} />
+          </View>
         )}
 
-        <TouchableOpacity
-          onPress={() => googlePrompt()}
-          disabled={busy || !googleRequest}
-          style={[styles.googleButton, (!googleRequest || busy) && styles.busy]}
-        >
-          <Text style={styles.googleText}>Continue with Google</Text>
-        </TouchableOpacity>
+        {appleEnabled && (
+          <AppleSignInBlock mode={mode} busy={busy} setBusy={setBusy} setError={setError} />
+        )}
+        {googleEnabled && (
+          <GoogleSignInBlock busy={busy} setBusy={setBusy} setError={setError} />
+        )}
       </View>
     </KeyboardAvoidingView>
   );

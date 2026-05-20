@@ -21,7 +21,13 @@ import {
   type AuthUser,
   type SiteSummary,
 } from "../lib/api";
-import { clearToken, loadToken, saveToken } from "../lib/storage";
+import {
+  clearToken,
+  loadCurrentSiteId,
+  loadToken,
+  saveCurrentSiteId,
+  saveToken,
+} from "../lib/storage";
 
 type AuthState =
   | { status: "loading" }
@@ -75,19 +81,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Keep the api module's current-site singleton in sync with our state so
   // any function called from any screen targets the right /sites/:siteId.
+  // Also persist the selection to SecureStore so the user lands on the same
+  // site after a restart.
   useEffect(() => {
     if (state.status === "authed") {
       apiSetCurrentSiteId(state.currentSiteId);
+      saveCurrentSiteId(state.currentSiteId).catch(() => {});
     } else {
       apiSetCurrentSiteId(null);
     }
   }, [state]);
 
   const loadSitesAndAccept = useCallback(
-    async (token: string, user: AuthUser): Promise<void> => {
+    async (token: string, user: AuthUser, preferredSiteId: string | null): Promise<void> => {
       const sitesRes = await apiListSites(token);
       const sites = sitesRes.ok ? sitesRes.data.sites : [];
-      const currentSiteId = pickDefaultSite(sites);
+      // Honour the preferred (e.g. persisted) site if it's still a member of
+      // the user's sites list; otherwise fall back to the default picker.
+      const stillPresent = preferredSiteId
+        ? sites.some((s) => s.id === preferredSiteId)
+        : false;
+      const currentSiteId = stillPresent ? preferredSiteId : pickDefaultSite(sites);
       setState({ status: "authed", token, user, currentSiteId, sites });
     },
     [],
@@ -95,7 +109,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     (async () => {
-      const token = await loadToken();
+      const [token, persistedSiteId] = await Promise.all([loadToken(), loadCurrentSiteId()]);
       if (!token) {
         setState({ status: "anon" });
         return;
@@ -103,17 +117,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const user = await apiFetchMe(token);
       if (!user) {
         await clearToken();
+        await saveCurrentSiteId(null).catch(() => {});
         setState({ status: "anon" });
         return;
       }
-      await loadSitesAndAccept(token, user);
+      await loadSitesAndAccept(token, user, persistedSiteId);
     })();
   }, [loadSitesAndAccept]);
 
   const acceptSession = useCallback(
     async (token: string, user: AuthUser): Promise<void> => {
       await saveToken(token);
-      await loadSitesAndAccept(token, user);
+      // Fresh session — start the user on whatever site was last selected if
+      // they're still a member; otherwise the picker chooses.
+      const previouslySelected = await loadCurrentSiteId();
+      await loadSitesAndAccept(token, user, previouslySelected);
     },
     [loadSitesAndAccept],
   );
@@ -164,6 +182,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(async () => {
     if (state.status === "authed") await apiLogout(state.token);
     await clearToken();
+    await saveCurrentSiteId(null).catch(() => {});
     setState({ status: "anon" });
   }, [state]);
 

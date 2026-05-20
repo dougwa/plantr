@@ -7,23 +7,26 @@ type Item = {
   route: RootTab;
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
+  gated: boolean;
 };
 
 const ITEMS: Item[] = [
-  { route: "Map", icon: "map-outline", label: "Map" },
-  { route: "Browse", icon: "grid-outline", label: "Browse" },
-  { route: "Reports", icon: "bar-chart-outline", label: "Reports" },
-  { route: "Settings", icon: "settings-outline", label: "Settings" },
+  { route: "Sites", icon: "albums-outline", label: "Sites", gated: false },
+  { route: "Browse", icon: "grid-outline", label: "Browse", gated: true },
+  { route: "Reports", icon: "bar-chart-outline", label: "Reports", gated: true },
+  { route: "Settings", icon: "settings-outline", label: "Settings", gated: false },
 ];
 
 export default function BottomBar({
   active,
   onSelectTab,
   onScan,
+  siteSelected,
 }: {
   active: RootTab;
   onSelectTab: (tab: RootTab) => void;
   onScan: () => void;
+  siteSelected: boolean;
 }) {
   return (
     <SafeAreaView edges={["bottom"]} style={styles.safe}>
@@ -31,22 +34,26 @@ export default function BottomBar({
         <BarButton
           item={ITEMS[0]!}
           active={active === ITEMS[0]!.route}
+          disabled={false}
           onPress={() => onSelectTab(ITEMS[0]!.route)}
         />
         <BarButton
           item={ITEMS[1]!}
           active={active === ITEMS[1]!.route}
+          disabled={!siteSelected}
           onPress={() => onSelectTab(ITEMS[1]!.route)}
         />
-        <ScanButton onPress={onScan} />
+        <ScanButton onPress={onScan} disabled={!siteSelected} />
         <BarButton
           item={ITEMS[2]!}
           active={active === ITEMS[2]!.route}
+          disabled={!siteSelected}
           onPress={() => onSelectTab(ITEMS[2]!.route)}
         />
         <BarButton
           item={ITEMS[3]!}
           active={active === ITEMS[3]!.route}
+          disabled={false}
           onPress={() => onSelectTab(ITEMS[3]!.route)}
         />
       </View>
@@ -57,16 +64,19 @@ export default function BottomBar({
 function BarButton({
   item,
   active,
+  disabled,
   onPress,
 }: {
   item: Item;
   active: boolean;
+  disabled: boolean;
   onPress: () => void;
 }) {
   return (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={item.label}
+      accessibilityState={{ disabled }}
       onPress={onPress}
       style={styles.tab}
       hitSlop={6}
@@ -74,21 +84,23 @@ function BarButton({
       <Ionicons
         name={item.icon}
         size={24}
-        color={active ? "#171717" : "#a3a3a3"}
+        color={disabled ? "#d4d4d4" : active ? "#171717" : "#a3a3a3"}
       />
     </Pressable>
   );
 }
 
-function ScanButton({ onPress }: { onPress: () => void }) {
+function ScanButton({ onPress, disabled }: { onPress: () => void; disabled: boolean }) {
   return (
     <View style={styles.scanSlot} pointerEvents="box-none">
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Scan QR code"
+        accessibilityState={{ disabled }}
         onPress={onPress}
         style={({ pressed }) => [
           styles.scanButton,
+          disabled && styles.scanButtonDisabled,
           pressed && { transform: [{ scale: 0.96 }], opacity: 0.9 },
         ]}
       >
@@ -134,4 +146,5 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 3 },
     elevation: 5,
   },
+  scanButtonDisabled: { backgroundColor: "#bbf7d0" },
 });

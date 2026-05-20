@@ -253,6 +253,46 @@ export const siteRoutes: FastifyPluginAsync = async (app) => {
   });
 
   // -----------------------------------------------------------------------
+  // POST /sites/:siteId/join — self-join a PUBLIC site as Viewer
+  //
+  // Public sites are readable by anyone, but joining promotes the user from
+  // "anonymous viewer" to "Viewer member" — the site shows up in their My
+  // Sites list and they can hop back without re-finding it. Private sites
+  // can only be joined via Invitation (Phase 7).
+  // -----------------------------------------------------------------------
+  app.post<{ Params: { siteId: string } }>(
+    "/sites/:siteId/join",
+    { onRequest: [app.requireAuth] },
+    async (req, reply) => {
+      const site = await prisma.site.findUnique({ where: { id: req.params.siteId } });
+      if (!site || site.deletedAt) {
+        return reply.code(404).send({ error: "site_not_found" });
+      }
+      if (site.visibility !== Visibility.PUBLIC) {
+        return reply.code(403).send({ error: "private_site_requires_invitation" });
+      }
+      const userId = req.user!.id;
+      const existing = await prisma.membership.findUnique({
+        where: { siteId_userId: { siteId: site.id, userId } },
+      });
+      if (existing) {
+        return reply.code(409).send({ error: "already_member", role: existing.role });
+      }
+      await prisma.membership.create({
+        data: { siteId: site.id, userId, role: MembershipRole.VIEWER },
+      });
+      const withOwner = await prisma.site.findUniqueOrThrow({
+        where: { id: site.id },
+        include: { owner: { select: { id: true, username: true, name: true } } },
+      });
+      return reply.code(201).send({
+        site: publicSite(withOwner),
+        role: MembershipRole.VIEWER,
+      });
+    },
+  );
+
+  // -----------------------------------------------------------------------
   // PATCH /sites/:siteId — update name/address/visibility
   // -----------------------------------------------------------------------
   app.patch<{ Params: { siteId: string } }>(

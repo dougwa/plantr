@@ -69,7 +69,12 @@
     "extra": {
       "eas": {
         "projectId": "9373a56a-b421-4ec1-86c0-4dc528d0683c"
-      }
+      },
+      "//": "OAuth is opt-in. Flip the corresponding flag and fill in client IDs when keys are set up.",
+      "appleOauthEnabled": false,
+      "googleIosClientId": null,
+      "googleAndroidClientId": null,
+      "googleWebClientId": null
     }
   }
 }

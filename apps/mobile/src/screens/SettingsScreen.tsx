@@ -12,7 +12,9 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useNavigation } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import type { RootStackParamList } from "../navigation/types";
 import { useAuth } from "../contexts/AuthContext";
 import {
   ALL_BARCODE_TYPES,
@@ -33,9 +35,14 @@ import {
 } from "../lib/api";
 import { tagKindStyle } from "../lib/tagStyle";
 
+type Nav = NativeStackNavigationProp<RootStackParamList, "Settings">;
+
 export default function SettingsScreen() {
   const { state, signOut } = useAuth();
+  const nav = useNavigation<Nav>();
   if (state.status !== "authed") return null;
+
+  const currentSite = state.sites.find((s) => s.id === state.currentSiteId) ?? null;
 
   function confirmSignOut() {
     Alert.alert("Sign out?", "You will need to log in again.", [
@@ -51,10 +58,32 @@ export default function SettingsScreen() {
 
         <View style={styles.row}>
           <Text style={styles.label}>Signed in as</Text>
-          <Text style={styles.value}>{state.user.username}</Text>
+          <Text style={styles.value}>
+            {state.user.email ?? state.user.username}
+          </Text>
         </View>
 
-        <TagsSection token={state.token} />
+        <Pressable
+          onPress={() =>
+            currentSite ? nav.push("SiteManagement", { siteId: currentSite.id }) : null
+          }
+          disabled={!currentSite}
+          style={({ pressed }) => [
+            styles.row,
+            !currentSite && { opacity: 0.6 },
+            pressed && { backgroundColor: "#f5f5f5" },
+          ]}
+        >
+          <Text style={styles.label}>Current site</Text>
+          <View style={styles.rowEnd}>
+            <Text style={styles.value}>{currentSite?.name ?? "None selected"}</Text>
+            {currentSite ? (
+              <Ionicons name="chevron-forward" size={18} color="#a3a3a3" />
+            ) : null}
+          </View>
+        </Pressable>
+
+        {state.currentSiteId ? <TagsSection token={state.token} /> : null}
 
         <ScannerSection />
 
@@ -63,7 +92,6 @@ export default function SettingsScreen() {
         <TouchableOpacity style={styles.button} onPress={confirmSignOut}>
           <Text style={styles.buttonText}>Sign out</Text>
         </TouchableOpacity>
-        <Text style={styles.note}>User management coming soon.</Text>
       </ScrollView>
     </SafeAreaView>
   );
@@ -415,6 +443,7 @@ const styles = StyleSheet.create({
   },
   label: { color: "#525252", fontSize: 16 },
   value: { color: "#171717", fontSize: 16, fontWeight: "500" },
+  rowEnd: { flexDirection: "row", alignItems: "center", gap: 6 },
   section: { marginTop: 28 },
   sectionTitle: { fontSize: 20, fontWeight: "600", color: "#171717" },
   sectionHint: { color: "#737373", fontSize: 13, marginTop: 4, marginBottom: 8 },

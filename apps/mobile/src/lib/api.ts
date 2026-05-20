@@ -134,6 +134,95 @@ export async function listSites(token: string) {
   return request<{ sites: SiteSummary[] }>("/sites", { method: "GET", token });
 }
 
+export async function createSite(
+  token: string,
+  body: { name: string; address?: string; visibility?: "PUBLIC" | "PRIVATE" },
+) {
+  return request<{ site: SiteSummary }>("/sites", {
+    method: "POST",
+    body: JSON.stringify(body),
+    token,
+  });
+}
+
+export async function patchSite(
+  token: string,
+  siteId: string,
+  body: { name?: string; address?: string | null; visibility?: "PUBLIC" | "PRIVATE" },
+) {
+  return request<{ site: SiteSummary }>(`/sites/${encodeURIComponent(siteId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+    token,
+  });
+}
+
+export async function deleteSite(token: string, siteId: string) {
+  return request<{ site: SiteSummary }>(`/sites/${encodeURIComponent(siteId)}`, {
+    method: "DELETE",
+    token,
+  });
+}
+
+export async function joinPublicSite(token: string, siteId: string) {
+  return request<{ site: SiteSummary; role: "VIEWER" }>(
+    `/sites/${encodeURIComponent(siteId)}/join`,
+    { method: "POST", token },
+  );
+}
+
+export async function leaveSite(token: string, siteId: string, userId: string) {
+  return request<{ ok: boolean }>(
+    `/sites/${encodeURIComponent(siteId)}/members/${encodeURIComponent(userId)}`,
+    { method: "DELETE", token },
+  );
+}
+
+export type PublicSiteSearchResult = {
+  id: string;
+  name: string;
+  address: string | null;
+  lat: number | null;
+  lng: number | null;
+  visibility: "PUBLIC";
+  createdAt: string;
+  updatedAt: string;
+  owner: { id: string; username: string; name: string | null };
+  distanceKm: number | null;
+};
+
+export async function searchPublicSites(
+  token: string,
+  params: { q?: string; lat?: number; lng?: number; radiusKm?: number; limit?: number },
+) {
+  const qs = new URLSearchParams();
+  if (params.q) qs.set("q", params.q);
+  if (params.lat !== undefined) qs.set("lat", String(params.lat));
+  if (params.lng !== undefined) qs.set("lng", String(params.lng));
+  if (params.radiusKm !== undefined) qs.set("radiusKm", String(params.radiusKm));
+  if (params.limit !== undefined) qs.set("limit", String(params.limit));
+  const tail = qs.toString();
+  return request<{ sites: PublicSiteSearchResult[] }>(
+    `/sites/public/search${tail ? `?${tail}` : ""}`,
+    { method: "GET", token },
+  );
+}
+
+export type SiteMember = {
+  id: string;
+  siteId: string;
+  role: SiteRole;
+  createdAt: string;
+  user: { id: string; username: string; name: string | null; email: string | null };
+};
+
+export async function listSiteMembers(token: string, siteId: string) {
+  return request<{ members: SiteMember[] }>(
+    `/sites/${encodeURIComponent(siteId)}/members`,
+    { method: "GET", token },
+  );
+}
+
 // --- auth -------------------------------------------------------------------
 
 export async function login(identifier: string, password: string) {

@@ -1,12 +1,12 @@
 /**
- * Native-side OAuth helpers. Each function performs the platform-specific
- * dance and returns the identity token (Apple) or id_token (Google) that the
- * API will verify.
+ * Native-side OAuth helpers. Each provider is opt-in via flags in
+ * app.json -> expo.extra: set `appleOauthEnabled: true` (and ship a dev build
+ * with Sign in with Apple capability) to enable Apple; set any of the Google
+ * client IDs to enable Google.
  *
- * Configure GOOGLE_OAUTH_CLIENT_ID via app.json -> expo.extra OR by inlining
- * the value below. Apple requires no client ID on iOS — the bundle id is the
- * audience and Apple's docs handle that automatically when we call
- * AppleAuthentication.signInAsync with the email/fullName scopes.
+ * When a provider is disabled, the screen never imports its hook in a render
+ * pass — the corresponding child component just isn't mounted. This keeps
+ * expo-auth-session from throwing at render time when no client IDs are set.
  */
 import { Platform } from "react-native";
 import Constants from "expo-constants";
@@ -17,6 +17,45 @@ export type AppleSignInResult = {
   identityToken: string;
   fullName: { givenName: string | null; familyName: string | null } | null;
 };
+
+type AppExtra = {
+  appleOauthEnabled?: unknown;
+  googleIosClientId?: unknown;
+  googleAndroidClientId?: unknown;
+  googleWebClientId?: unknown;
+};
+
+function readExtra(): AppExtra {
+  return (Constants.expoConfig?.extra ?? {}) as AppExtra;
+}
+
+function pickClientId(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+export type GoogleClientIds = {
+  iosClientId?: string;
+  androidClientId?: string;
+  webClientId?: string;
+};
+
+export function readGoogleClientIds(): GoogleClientIds {
+  const extra = readExtra();
+  return {
+    iosClientId: pickClientId(extra.googleIosClientId),
+    androidClientId: pickClientId(extra.googleAndroidClientId),
+    webClientId: pickClientId(extra.googleWebClientId),
+  };
+}
+
+export function isGoogleOauthConfigured(): boolean {
+  const ids = readGoogleClientIds();
+  return !!(ids.iosClientId || ids.androidClientId || ids.webClientId);
+}
+
+export function isAppleOauthEnabled(): boolean {
+  return readExtra().appleOauthEnabled === true;
+}
 
 export async function isAppleSignInAvailable(): Promise<boolean> {
   if (Platform.OS !== "ios") return false;
@@ -48,29 +87,11 @@ export async function signInWithApple(): Promise<AppleSignInResult> {
   };
 }
 
-type GoogleClientIds = {
-  iosClientId?: string;
-  androidClientId?: string;
-  webClientId?: string;
-};
-
-export function readGoogleClientIds(): GoogleClientIds {
-  const extra = (Constants.expoConfig?.extra ?? {}) as Record<string, unknown>;
-  return {
-    iosClientId:
-      typeof extra.googleIosClientId === "string" ? extra.googleIosClientId : undefined,
-    androidClientId:
-      typeof extra.googleAndroidClientId === "string"
-        ? extra.googleAndroidClientId
-        : undefined,
-    webClientId:
-      typeof extra.googleWebClientId === "string" ? extra.googleWebClientId : undefined,
-  };
-}
-
+// Caller is responsible for only mounting the component that uses this hook
+// when isGoogleOauthConfigured() returns true — useAuthRequest throws when
+// every client ID is undefined.
 export function useGoogleAuth() {
   const ids = readGoogleClientIds();
-  // Returns [request, response, promptAsync] — caller drives the flow.
   return Google.useAuthRequest({
     iosClientId: ids.iosClientId,
     androidClientId: ids.androidClientId,

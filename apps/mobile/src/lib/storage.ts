@@ -1,6 +1,7 @@
 import * as SecureStore from "expo-secure-store";
 
 const TOKEN_KEY = "plantr.token";
+const CURRENT_SITE_KEY = "plantr.currentSiteId";
 const VIEWPORT_KEY = "plantr.mapViewport";
 
 export async function saveToken(token: string): Promise<void> {
@@ -13,6 +14,18 @@ export async function loadToken(): Promise<string | null> {
 
 export async function clearToken(): Promise<void> {
   await SecureStore.deleteItemAsync(TOKEN_KEY);
+}
+
+export async function saveCurrentSiteId(id: string | null): Promise<void> {
+  if (id == null) {
+    await SecureStore.deleteItemAsync(CURRENT_SITE_KEY).catch(() => {});
+    return;
+  }
+  await SecureStore.setItemAsync(CURRENT_SITE_KEY, id);
+}
+
+export async function loadCurrentSiteId(): Promise<string | null> {
+  return SecureStore.getItemAsync(CURRENT_SITE_KEY);
 }
 
 export type SavedViewport = {

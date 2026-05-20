@@ -24,6 +24,13 @@ type Tile = {
 
 const TILES: Tile[] = [
   {
+    key: "map",
+    label: "Map",
+    icon: "map-outline",
+    iconColor: "#0ea5e9",
+    onPress: (nav) => nav.push("Map"),
+  },
+  {
     key: "search",
     label: "Search",
     icon: "search-outline",
