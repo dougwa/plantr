@@ -1,6 +1,7 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Modal,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -10,13 +11,19 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { useFocusEffect, useNavigation } from "@react-navigation/native";
-import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import type { RootStackParamList } from "../../navigation/types";
-import { useAuth } from "../../contexts/AuthContext";
-import { unreadNotificationCount, type SiteRole, type SiteSummary } from "../../lib/api";
+import { useAuth } from "../contexts/AuthContext";
+import { unreadNotificationCount, type SiteRole, type SiteSummary } from "../lib/api";
 
-type Nav = NativeStackNavigationProp<RootStackParamList, "Sites">;
+type Destination = "SiteCreate" | "SiteManagement" | "PublicSiteSearch" | "Notifications";
+
+type Props = {
+  visible: boolean;
+  onClose: () => void;
+  onNavigate: (
+    destination: Destination,
+    params?: { siteId: string },
+  ) => void;
+};
 
 const ROLE_LABEL: Record<SiteRole, string> = {
   OWNER: "Owner",
@@ -25,8 +32,7 @@ const ROLE_LABEL: Record<SiteRole, string> = {
   VIEWER: "Viewer",
 };
 
-export default function SitesScreen() {
-  const nav = useNavigation<Nav>();
+export default function SiteSelectorModal({ visible, onClose, onNavigate }: Props) {
   const { state, refreshSites, setCurrentSite } = useAuth();
   const token = state.status === "authed" ? state.token : null;
   const [refreshing, setRefreshing] = useState(false);
@@ -38,14 +44,13 @@ export default function SitesScreen() {
     if (r.ok) setUnread(r.data.count);
   }, [token]);
 
-  useFocusEffect(
-    useCallback(() => {
-      // Re-pull on focus — covers external mutations (a peer kicks you out,
-      // an invitation got accepted, etc.).
-      refreshSites();
-      refreshUnread();
-    }, [refreshSites, refreshUnread]),
-  );
+  useEffect(() => {
+    if (!visible) return;
+    // Pull fresh data each time the modal opens — covers external mutations
+    // (a peer kicks you out, an invitation got accepted, etc.).
+    refreshSites();
+    refreshUnread();
+  }, [visible, refreshSites, refreshUnread]);
 
   if (state.status !== "authed") return null;
 
@@ -57,82 +62,108 @@ export default function SitesScreen() {
 
   const sites = state.sites;
   const currentId = state.currentSiteId;
+  const hasCurrent = currentId != null;
+
+  function pick(siteId: string) {
+    setCurrentSite(siteId);
+    onClose();
+  }
 
   return (
-    <SafeAreaView style={styles.root} edges={["top"]}>
-      <ScrollView
-        contentContainerStyle={styles.scroll}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-      >
+    <Modal
+      visible={visible}
+      animationType="slide"
+      onRequestClose={() => {
+        if (hasCurrent) onClose();
+      }}
+    >
+      <SafeAreaView style={styles.root} edges={["top"]}>
         <View style={styles.titleRow}>
           <Text style={styles.h1}>Sites</Text>
-          <Pressable
-            onPress={() => nav.push("Notifications")}
-            hitSlop={10}
-            accessibilityLabel="Notifications"
-            style={({ pressed }) => [styles.bellBtn, pressed && { opacity: 0.5 }]}
-          >
-            <Ionicons name="notifications-outline" size={24} color="#171717" />
-            {unread > 0 ? (
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>{unread > 99 ? "99+" : unread}</Text>
-              </View>
+          <View style={styles.titleActions}>
+            <Pressable
+              onPress={() => onNavigate("Notifications")}
+              hitSlop={10}
+              accessibilityLabel="Notifications"
+              style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.5 }]}
+            >
+              <Ionicons name="notifications-outline" size={24} color="#171717" />
+              {unread > 0 ? (
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>{unread > 99 ? "99+" : unread}</Text>
+                </View>
+              ) : null}
+            </Pressable>
+            {hasCurrent ? (
+              <Pressable
+                onPress={onClose}
+                hitSlop={10}
+                accessibilityLabel="Close"
+                style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.5 }]}
+              >
+                <Ionicons name="close" size={26} color="#171717" />
+              </Pressable>
             ) : null}
+          </View>
+        </View>
+
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        >
+          <Pressable
+            style={({ pressed }) => [styles.discoverRow, pressed && styles.pressed]}
+            onPress={() => onNavigate("PublicSiteSearch")}
+          >
+            <Ionicons name="search-outline" size={22} color="#16a34a" />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.discoverTitle}>Find public sites</Text>
+              <Text style={styles.discoverHint}>Browse public gardens near you or by name.</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color="#a3a3a3" />
           </Pressable>
-        </View>
 
-        <Pressable
-          style={({ pressed }) => [styles.discoverRow, pressed && styles.pressed]}
-          onPress={() => nav.push("PublicSiteSearch")}
-        >
-          <Ionicons name="search-outline" size={22} color="#16a34a" />
-          <View style={{ flex: 1 }}>
-            <Text style={styles.discoverTitle}>Find public sites</Text>
-            <Text style={styles.discoverHint}>Browse public gardens near you or by name.</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color="#a3a3a3" />
-        </Pressable>
+          <Text style={styles.sectionLabel}>MY SITES</Text>
+          {sites.length === 0 ? (
+            <View style={styles.empty}>
+              <Text style={styles.emptyText}>
+                You're not part of any sites yet. Create one to get started.
+              </Text>
+            </View>
+          ) : (
+            sites.map((s) => (
+              <SiteRow
+                key={s.id}
+                site={s}
+                isCurrent={s.id === currentId}
+                onSelect={() => pick(s.id)}
+                onManage={() => onNavigate("SiteManagement", { siteId: s.id })}
+              />
+            ))
+          )}
 
-        <Text style={styles.sectionLabel}>MY SITES</Text>
-        {sites.length === 0 ? (
-          <View style={styles.empty}>
-            <Text style={styles.emptyText}>
-              You're not part of any sites yet. Create one to get started.
+          <Pressable
+            style={({ pressed }) => [styles.createBtn, pressed && styles.pressed]}
+            onPress={() => onNavigate("SiteCreate")}
+          >
+            <Ionicons name="add" size={22} color="#fff" />
+            <Text style={styles.createText}>Create a new site</Text>
+          </Pressable>
+
+          {sites.length === 0 ? (
+            <Text style={styles.note}>
+              New users start without any sites. Create one to plant your flag, or join a
+              public site via search.
             </Text>
+          ) : null}
+        </ScrollView>
+        {refreshing && sites.length === 0 && (
+          <View pointerEvents="none" style={styles.spinner}>
+            <ActivityIndicator />
           </View>
-        ) : (
-          sites.map((s) => (
-            <SiteRow
-              key={s.id}
-              site={s}
-              isCurrent={s.id === currentId}
-              onSelect={() => setCurrentSite(s.id)}
-              onManage={() => nav.push("SiteManagement", { siteId: s.id })}
-            />
-          ))
         )}
-
-        <Pressable
-          style={({ pressed }) => [styles.createBtn, pressed && styles.pressed]}
-          onPress={() => nav.push("SiteCreate")}
-        >
-          <Ionicons name="add" size={22} color="#fff" />
-          <Text style={styles.createText}>Create a new site</Text>
-        </Pressable>
-
-        {state.status === "authed" && state.sites.length === 0 ? (
-          <Text style={styles.note}>
-            New users start without any sites. Create one to plant your flag, or join a
-            public site via search.
-          </Text>
-        ) : null}
-      </ScrollView>
-      {refreshing && state.sites.length === 0 && (
-        <View pointerEvents="none" style={styles.spinner}>
-          <ActivityIndicator />
-        </View>
-      )}
-    </SafeAreaView>
+      </SafeAreaView>
+    </Modal>
   );
 }
 
@@ -180,10 +211,13 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: 16,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 12,
   },
+  titleActions: { flexDirection: "row", alignItems: "center", gap: 8 },
   h1: { fontSize: 28, fontWeight: "600", color: "#171717" },
-  bellBtn: { padding: 4 },
+  iconBtn: { padding: 4 },
   badge: {
     position: "absolute",
     top: -2,
@@ -210,7 +244,6 @@ const styles = StyleSheet.create({
   },
   discoverTitle: { fontSize: 15, fontWeight: "500", color: "#171717" },
   discoverHint: { fontSize: 12, color: "#737373", marginTop: 2 },
-
   sectionLabel: {
     fontSize: 12,
     fontWeight: "600",
@@ -254,7 +287,6 @@ const styles = StyleSheet.create({
   siteName: { fontSize: 16, fontWeight: "500", color: "#171717" },
   siteMeta: { fontSize: 12, color: "#737373", marginTop: 2 },
   manageBtn: { paddingHorizontal: 14, alignItems: "center", justifyContent: "center" },
-
   createBtn: {
     flexDirection: "row",
     alignItems: "center",

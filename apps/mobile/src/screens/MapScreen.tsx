@@ -315,8 +315,11 @@ export default function MapScreen() {
   useEffect(() => {
     (async () => {
       setLoading(true);
-      await reload();
-      setLoading(false);
+      try {
+        await reload();
+      } finally {
+        setLoading(false);
+      }
     })();
   }, [reload]);
 
@@ -1171,7 +1174,7 @@ export default function MapScreen() {
       </SafeAreaView>
 
       {nav.canGoBack() && (
-        <SafeAreaView style={styles.backSafe} edges={["top"]} pointerEvents="box-none">
+        <SafeAreaView style={styles.backSafe} edges={[]} pointerEvents="box-none">
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Back"
@@ -1184,7 +1187,7 @@ export default function MapScreen() {
         </SafeAreaView>
       )}
 
-      <SafeAreaView style={styles.helpSafe} edges={["top"]} pointerEvents="box-none">
+      <SafeAreaView style={styles.helpSafe} edges={[]} pointerEvents="box-none">
         <View style={styles.helpPill}>
           <Text style={styles.helpText}>
             {editing

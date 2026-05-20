@@ -1,11 +1,10 @@
 import type { BrowseCategory, PlantFilter } from "./BrowseStackTypes";
 
 export type RootStackParamList = {
-  Sites: undefined;
+  Map: { highlightPlantIds?: string[]; focusShapeId?: string | null } | undefined;
   Browse: undefined;
   Reports: undefined;
   Settings: undefined;
-  Map: { highlightPlantIds?: string[]; focusShapeId?: string | null } | undefined;
   SiteCreate: undefined;
   PublicSiteSearch: undefined;
   SiteManagement: { siteId: string };
@@ -18,7 +17,7 @@ export type RootStackParamList = {
   Scan: undefined;
 };
 
-export type RootTab = "Sites" | "Browse" | "Reports" | "Settings";
+export type RootTab = "Map" | "Browse" | "Reports" | "Settings";
 
 declare global {
   namespace ReactNavigation {

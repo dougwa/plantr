@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { Alert, StyleSheet, View } from "react-native";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { StyleSheet, View } from "react-native";
 import {
   NavigationContainer,
   useNavigationContainerRef,
@@ -15,24 +15,22 @@ import PlantDetailScreen from "../screens/PlantDetailScreen";
 import ReportsScreen from "../screens/ReportsScreen";
 import SettingsScreen from "../screens/SettingsScreen";
 import ScanScreen from "../screens/ScanScreen";
-import SitesScreen from "../screens/sites/SitesScreen";
 import SiteCreateScreen from "../screens/sites/SiteCreateScreen";
 import SiteManagementScreen from "../screens/sites/SiteManagementScreen";
 import PublicSiteSearchScreen from "../screens/sites/PublicSiteSearchScreen";
 import SiteInviteScreen from "../screens/sites/SiteInviteScreen";
 import NotificationsScreen from "../screens/sites/NotificationsScreen";
 import { useAuth } from "../contexts/AuthContext";
+import SiteHeader from "../components/SiteHeader";
+import SiteSelectorModal from "../components/SiteSelectorModal";
 import BottomBar from "./BottomBar";
 import type { RootStackParamList, RootTab } from "./types";
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
-const ROOT_TABS: RootTab[] = ["Sites", "Browse", "Reports", "Settings"];
-// Tabs that need a current-site selection. Sites + Settings stay live so
-// users can always pick a site or sign out.
-const SITE_GATED_TABS = new Set<RootTab>(["Browse", "Reports"]);
+const ROOT_TABS: RootTab[] = ["Map", "Browse", "Reports", "Settings"];
 
-function isRootTab(name: string | undefined): name is RootTab {
+function isRootTab(name: string | null | undefined): name is RootTab {
   return !!name && (ROOT_TABS as string[]).includes(name);
 }
 
@@ -46,22 +44,44 @@ export default function AppNavigator() {
   const { state } = useAuth();
   const hasCurrentSite =
     state.status === "authed" && state.currentSiteId != null;
-  const [activeTab, setActiveTab] = useState<RootTab>("Sites");
-  const lastActiveRef = useRef<RootTab>("Sites");
+  const [activeTab, setActiveTab] = useState<RootTab>("Map");
+  const [topRoute, setTopRoute] = useState<string | null>("Map");
+  const [modalOpen, setModalOpen] = useState(false);
+  const lastActiveRef = useRef<RootTab>("Map");
+  // Tracks whether we've already auto-opened the modal for the current
+  // null-site state. Reset whenever a site is selected so a later null
+  // (e.g. site deletion) re-triggers the auto-open.
+  const autoOpenedForNull = useRef(false);
 
-  // If the current site is cleared while the user is on a gated tab, bounce
-  // them back to Sites so they don't hit no_site_selected errors.
+  // Auto-open the modal whenever the user transitions into a no-site state
+  // (post-login, site deleted, etc.). Dismissing via Settings sticks for the
+  // remainder of this null-state run.
   useEffect(() => {
-    if (!hasCurrentSite && SITE_GATED_TABS.has(activeTab)) {
-      lastActiveRef.current = "Sites";
-      setActiveTab("Sites");
-      navigationRef.reset({ index: 0, routes: [{ name: "Sites" }] });
+    if (state.status !== "authed") {
+      autoOpenedForNull.current = false;
+      return;
     }
-  }, [hasCurrentSite, activeTab, navigationRef]);
+    if (state.currentSiteId == null) {
+      if (!autoOpenedForNull.current) {
+        autoOpenedForNull.current = true;
+        setModalOpen(true);
+      }
+    } else {
+      autoOpenedForNull.current = false;
+    }
+  }, [state]);
+
+  const closeModal = useCallback(() => setModalOpen(false), []);
+  const openModal = useCallback(() => setModalOpen(true), []);
 
   function selectTab(tab: RootTab) {
-    if (!hasCurrentSite && SITE_GATED_TABS.has(tab)) {
-      Alert.alert("Pick a site first", "Choose or create a site to continue.");
+    if (tab === "Settings") {
+      closeModal();
+      navigationRef.reset({ index: 0, routes: [{ name: tab }] });
+      return;
+    }
+    if (!hasCurrentSite) {
+      openModal();
       return;
     }
     navigationRef.reset({ index: 0, routes: [{ name: tab }] });
@@ -69,11 +89,29 @@ export default function AppNavigator() {
 
   function openScan() {
     if (!hasCurrentSite) {
-      Alert.alert("Pick a site first", "Choose or create a site to scan plants.");
+      openModal();
       return;
     }
     navigationRef.navigate("Scan");
   }
+
+  function navigateFromModal(
+    destination: "SiteCreate" | "SiteManagement" | "PublicSiteSearch" | "Notifications",
+    params?: { siteId: string },
+  ) {
+    closeModal();
+    if (destination === "SiteManagement" && params) {
+      navigationRef.navigate("SiteManagement", params);
+    } else if (destination === "SiteCreate") {
+      navigationRef.navigate("SiteCreate");
+    } else if (destination === "PublicSiteSearch") {
+      navigationRef.navigate("PublicSiteSearch");
+    } else if (destination === "Notifications") {
+      navigationRef.navigate("Notifications");
+    }
+  }
+
+  const showHeader = isRootTab(topRoute);
 
   return (
     <NavigationContainer
@@ -84,19 +122,21 @@ export default function AppNavigator() {
           lastActiveRef.current = next;
           setActiveTab(next);
         }
+        const top = navState?.routes[navState.index]?.name;
+        setTopRoute(top ?? null);
       }}
     >
       <View style={styles.root}>
+        {showHeader ? <SiteHeader onPress={openModal} /> : null}
         <View style={styles.stackWrap}>
           <Stack.Navigator
-            initialRouteName="Sites"
+            initialRouteName="Map"
             screenOptions={{ headerShown: false }}
           >
-            <Stack.Screen name="Sites" component={SitesScreen} />
+            <Stack.Screen name="Map" component={MapScreen} />
             <Stack.Screen name="Browse" component={BrowseHomeScreen} />
             <Stack.Screen name="Reports" component={ReportsScreen} />
             <Stack.Screen name="Settings" component={SettingsScreen} />
-            <Stack.Screen name="Map" component={MapScreen} />
             <Stack.Screen name="SiteCreate" component={SiteCreateScreen} />
             <Stack.Screen name="PublicSiteSearch" component={PublicSiteSearchScreen} />
             <Stack.Screen name="SiteManagement" component={SiteManagementScreen} />
@@ -118,6 +158,11 @@ export default function AppNavigator() {
           onSelectTab={selectTab}
           onScan={openScan}
           siteSelected={hasCurrentSite}
+        />
+        <SiteSelectorModal
+          visible={modalOpen}
+          onClose={closeModal}
+          onNavigate={navigateFromModal}
         />
       </View>
     </NavigationContainer>

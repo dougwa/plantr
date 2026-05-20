@@ -24,13 +24,6 @@ type Tile = {
 
 const TILES: Tile[] = [
   {
-    key: "map",
-    label: "Map",
-    icon: "map-outline",
-    iconColor: "#0ea5e9",
-    onPress: (nav) => nav.push("Map"),
-  },
-  {
     key: "search",
     label: "Search",
     icon: "search-outline",
@@ -62,7 +55,7 @@ const TILES: Tile[] = [
 export default function BrowseHomeScreen() {
   const nav = useNavigation<Nav>();
   return (
-    <SafeAreaView style={styles.root} edges={["top"]}>
+    <SafeAreaView style={styles.root} edges={[]}>
       <ScrollView contentContainerStyle={styles.scroll}>
         <Text style={styles.h1}>Browse</Text>
         <View style={styles.grid}>

@@ -79,16 +79,22 @@ function pickDefaultSite(sites: SiteSummary[]): string | null {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({ status: "loading" });
 
-  // Keep the api module's current-site singleton in sync with our state so
-  // any function called from any screen targets the right /sites/:siteId.
-  // Also persist the selection to SecureStore so the user lands on the same
-  // site after a restart.
+  // Sync the api module's current-site singleton during render (not in an
+  // effect) so any child screen's mount effects see the correct site. Effects
+  // run child-first, so deferring this to useEffect lets a child like
+  // MapScreen call site-scoped APIs before the api module has the id, which
+  // throws no_site_selected and leaves the screen stuck in its loading state.
+  if (state.status === "authed") {
+    apiSetCurrentSiteId(state.currentSiteId);
+  } else {
+    apiSetCurrentSiteId(null);
+  }
+
+  // Persistence stays in an effect — SecureStore is async and not on the
+  // critical path for child renders.
   useEffect(() => {
     if (state.status === "authed") {
-      apiSetCurrentSiteId(state.currentSiteId);
       saveCurrentSiteId(state.currentSiteId).catch(() => {});
-    } else {
-      apiSetCurrentSiteId(null);
     }
   }, [state]);
 

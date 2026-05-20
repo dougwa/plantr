@@ -11,7 +11,7 @@ type Item = {
 };
 
 const ITEMS: Item[] = [
-  { route: "Sites", icon: "albums-outline", label: "Sites", gated: false },
+  { route: "Map", icon: "map-outline", label: "Map", gated: true },
   { route: "Browse", icon: "grid-outline", label: "Browse", gated: true },
   { route: "Reports", icon: "bar-chart-outline", label: "Reports", gated: true },
   { route: "Settings", icon: "settings-outline", label: "Settings", gated: false },
@@ -34,7 +34,7 @@ export default function BottomBar({
         <BarButton
           item={ITEMS[0]!}
           active={active === ITEMS[0]!.route}
-          disabled={false}
+          disabled={!siteSelected}
           onPress={() => onSelectTab(ITEMS[0]!.route)}
         />
         <BarButton
