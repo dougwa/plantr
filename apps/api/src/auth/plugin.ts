@@ -6,7 +6,13 @@ import { SESSION_COOKIE } from "./tokens.js";
 export type AuthUser = {
   id: string;
   username: string;
+  email: string | null;
+  name: string | null;
   mustChangePass: boolean;
+  // True when the user still needs to set a real email — covers the legacy
+  // admin account (email=admin@local after backfill) and any user we created
+  // without an email. Phase-2 clients route these users to a profile screen.
+  mustCompleteProfile: boolean;
 };
 
 declare module "fastify" {
@@ -26,6 +32,15 @@ function extractToken(req: FastifyRequest): string | null {
   }
   const cookieToken = req.cookies?.[SESSION_COOKIE];
   return cookieToken ?? null;
+}
+
+export function deriveMustCompleteProfile(user: {
+  email: string | null;
+}): boolean {
+  if (!user.email) return true;
+  // Backfill placeholder for the seeded admin account.
+  if (user.email === "admin@local") return true;
+  return false;
 }
 
 const authPlugin: FastifyPluginAsync = async (app) => {
@@ -53,10 +68,14 @@ const authPlugin: FastifyPluginAsync = async (app) => {
         .catch(() => {});
     }
 
+    const u = session.user;
     req.user = {
-      id: session.user.id,
-      username: session.user.username,
-      mustChangePass: session.user.mustChangePass,
+      id: u.id,
+      username: u.username,
+      email: u.email,
+      name: u.name,
+      mustChangePass: u.mustChangePass,
+      mustCompleteProfile: deriveMustCompleteProfile(u),
     };
   });
 

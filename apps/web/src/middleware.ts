@@ -6,8 +6,13 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 type AuthUser = {
   id: string;
   username: string;
+  email: string | null;
+  name: string | null;
   mustChangePass: boolean;
+  mustCompleteProfile: boolean;
 };
+
+const PUBLIC_PATHS = new Set(["/login", "/signup"]);
 
 async function fetchUser(token: string): Promise<AuthUser | null> {
   try {
@@ -28,7 +33,8 @@ export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   const token = req.cookies.get(SESSION_COOKIE)?.value;
 
-  if (pathname === "/login") {
+  // Public auth pages: send already-signed-in users home.
+  if (PUBLIC_PATHS.has(pathname)) {
     if (!token) return NextResponse.next();
     const user = await fetchUser(token);
     if (!user) {
@@ -36,9 +42,7 @@ export async function middleware(req: NextRequest) {
       res.cookies.delete(SESSION_COOKIE);
       return res;
     }
-    return NextResponse.redirect(
-      new URL(user.mustChangePass ? "/change-password" : "/", req.url),
-    );
+    return NextResponse.redirect(new URL(nextStepFor(user), req.url));
   }
 
   if (!token) {
@@ -51,18 +55,32 @@ export async function middleware(req: NextRequest) {
     return res;
   }
 
+  // Step pages can only be visited when that step is the active one.
   if (pathname === "/change-password") {
     if (!user.mustChangePass) {
-      return NextResponse.redirect(new URL("/", req.url));
+      return NextResponse.redirect(new URL(nextStepFor(user), req.url));
+    }
+    return NextResponse.next();
+  }
+  if (pathname === "/complete-profile") {
+    if (!user.mustCompleteProfile) {
+      return NextResponse.redirect(new URL(nextStepFor(user), req.url));
     }
     return NextResponse.next();
   }
 
-  if (user.mustChangePass) {
-    return NextResponse.redirect(new URL("/change-password", req.url));
+  // For everything else: force the user through any pending step first.
+  const next = nextStepFor(user);
+  if (next !== "/") {
+    return NextResponse.redirect(new URL(next, req.url));
   }
-
   return NextResponse.next();
+}
+
+function nextStepFor(user: AuthUser): string {
+  if (user.mustChangePass) return "/change-password";
+  if (user.mustCompleteProfile) return "/complete-profile";
+  return "/";
 }
 
 export const config = {

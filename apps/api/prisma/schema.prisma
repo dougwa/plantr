@@ -43,7 +43,8 @@ enum OAuthProvider {
 model User {
   id             String   @id @default(cuid())
   username       String   @unique
-  passwordHash   String
+  // Nullable so OAuth-only users (Apple/Google) don't carry a password.
+  passwordHash   String?
   mustChangePass Boolean  @default(false)
   // email becomes the canonical login identity in Phase 2. Nullable during
   // Phase 1 backfill — tightens to NOT NULL once all rows have a value.

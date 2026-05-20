@@ -7,6 +7,18 @@ const schema = z.object({
   AUTH_TOKEN_SECRET: z.string().min(8, "AUTH_TOKEN_SECRET must be set"),
   PLANTNET_API_KEY: z.string().optional(),
 
+  // OAuth audiences. Comma-separated to cover (a) the iOS bundle id, (b) any
+  // web Service ID for Apple, and (c) multiple Google OAuth client IDs (iOS,
+  // Android, web). Endpoints respond 503 if the corresponding list is empty.
+  APPLE_CLIENT_IDS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.split(",").map((s) => s.trim()).filter(Boolean) : [])),
+  GOOGLE_CLIENT_IDS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.split(",").map((s) => s.trim()).filter(Boolean) : [])),
+
   // DigitalOcean Spaces (S3-compatible) photo storage.
   SPACES_REGION: z.string().min(1),
   SPACES_BUCKET: z.string().min(1),

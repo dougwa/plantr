@@ -5,6 +5,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { AuthProvider, useAuth } from "./src/contexts/AuthContext";
 import LoginScreen from "./src/screens/LoginScreen";
 import ChangePasswordScreen from "./src/screens/ChangePasswordScreen";
+import CompleteProfileScreen from "./src/screens/CompleteProfileScreen";
 import AppNavigator from "./src/navigation/AppNavigator";
 
 function Router() {
@@ -18,6 +19,7 @@ function Router() {
   }
   if (state.status === "anon") return <LoginScreen />;
   if (state.user.mustChangePass) return <ChangePasswordScreen />;
+  if (state.user.mustCompleteProfile) return <CompleteProfileScreen />;
   return <AppNavigator />;
 }
 

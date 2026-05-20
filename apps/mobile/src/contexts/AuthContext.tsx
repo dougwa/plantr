@@ -9,9 +9,13 @@ import {
 } from "react";
 import {
   changePassword as apiChangePassword,
+  completeProfile as apiCompleteProfile,
   fetchMe as apiFetchMe,
   login as apiLogin,
   logout as apiLogout,
+  oauthApple as apiOAuthApple,
+  oauthGoogle as apiOAuthGoogle,
+  signup as apiSignup,
   type AuthUser,
 } from "../lib/api";
 import { clearToken, loadToken, saveToken } from "../lib/storage";
@@ -25,9 +29,20 @@ type Result = { ok: true } | { ok: false; error: string };
 
 type AuthContextValue = {
   state: AuthState;
-  signIn: (username: string, password: string) => Promise<Result>;
+  signIn: (identifier: string, password: string) => Promise<Result>;
+  signUp: (email: string, password: string, name?: string) => Promise<Result>;
+  signInWithAppleToken: (
+    identityToken: string,
+    fullName?: { givenName: string | null; familyName: string | null } | null,
+  ) => Promise<Result>;
+  signInWithGoogleToken: (idToken: string) => Promise<Result>;
   signOut: () => Promise<void>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<Result>;
+  completeProfile: (body: {
+    email: string;
+    name?: string;
+    newPassword?: string;
+  }) => Promise<Result>;
   refreshUser: () => Promise<void>;
 };
 
@@ -53,13 +68,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })();
   }, []);
 
-  const signIn = useCallback(async (username: string, password: string): Promise<Result> => {
-    const result = await apiLogin(username, password);
-    if (!result.ok) return { ok: false, error: result.error };
-    await saveToken(result.data.token);
-    setState({ status: "authed", token: result.data.token, user: result.data.user });
-    return { ok: true };
+  const acceptSession = useCallback(async (token: string, user: AuthUser) => {
+    await saveToken(token);
+    setState({ status: "authed", token, user });
   }, []);
+
+  const signIn = useCallback(
+    async (identifier: string, password: string): Promise<Result> => {
+      const result = await apiLogin(identifier, password);
+      if (!result.ok) return { ok: false, error: result.error };
+      await acceptSession(result.data.token, result.data.user);
+      return { ok: true };
+    },
+    [acceptSession],
+  );
+
+  const signUp = useCallback(
+    async (email: string, password: string, name?: string): Promise<Result> => {
+      const result = await apiSignup(email, password, name);
+      if (!result.ok) return { ok: false, error: result.error };
+      await acceptSession(result.data.token, result.data.user);
+      return { ok: true };
+    },
+    [acceptSession],
+  );
+
+  const signInWithAppleToken = useCallback(
+    async (
+      identityToken: string,
+      fullName?: { givenName: string | null; familyName: string | null } | null,
+    ): Promise<Result> => {
+      const result = await apiOAuthApple(identityToken, fullName);
+      if (!result.ok) return { ok: false, error: result.error };
+      await acceptSession(result.data.token, result.data.user);
+      return { ok: true };
+    },
+    [acceptSession],
+  );
+
+  const signInWithGoogleToken = useCallback(
+    async (idToken: string): Promise<Result> => {
+      const result = await apiOAuthGoogle(idToken);
+      if (!result.ok) return { ok: false, error: result.error };
+      await acceptSession(result.data.token, result.data.user);
+      return { ok: true };
+    },
+    [acceptSession],
+  );
 
   const signOut = useCallback(async () => {
     if (state.status === "authed") await apiLogout(state.token);
@@ -81,6 +136,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [state],
   );
 
+  const completeProfile = useCallback(
+    async (body: {
+      email: string;
+      name?: string;
+      newPassword?: string;
+    }): Promise<Result> => {
+      if (state.status !== "authed") return { ok: false, error: "not_authed" };
+      const result = await apiCompleteProfile(state.token, body);
+      if (!result.ok) return { ok: false, error: result.error };
+      setState({ status: "authed", token: state.token, user: result.data.user });
+      return { ok: true };
+    },
+    [state],
+  );
+
   const refreshUser = useCallback(async () => {
     if (state.status !== "authed") return;
     const refreshed = await apiFetchMe(state.token);
@@ -88,8 +158,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [state]);
 
   const value = useMemo(
-    () => ({ state, signIn, signOut, changePassword, refreshUser }),
-    [state, signIn, signOut, changePassword, refreshUser],
+    () => ({
+      state,
+      signIn,
+      signUp,
+      signInWithAppleToken,
+      signInWithGoogleToken,
+      signOut,
+      changePassword,
+      completeProfile,
+      refreshUser,
+    }),
+    [
+      state,
+      signIn,
+      signUp,
+      signInWithAppleToken,
+      signInWithGoogleToken,
+      signOut,
+      changePassword,
+      completeProfile,
+      refreshUser,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

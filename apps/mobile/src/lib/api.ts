@@ -4,7 +4,10 @@ export const API_URL =
 export type AuthUser = {
   id: string;
   username: string;
+  email: string | null;
+  name: string | null;
   mustChangePass: boolean;
+  mustCompleteProfile: boolean;
 };
 
 export type ActionKind = "feeding" | "watering" | "fertilizing" | "treating";
@@ -86,10 +89,39 @@ async function request<T>(
 
 // --- auth -------------------------------------------------------------------
 
-export async function login(username: string, password: string) {
+export async function login(identifier: string, password: string) {
+  // The API accepts either `email` or `username` (legacy) — pick based on
+  // whether the user typed something that looks like an email.
+  const body = identifier.includes("@")
+    ? { email: identifier, password }
+    : { username: identifier, password };
   return request<{ token: string; user: AuthUser }>("/auth/login", {
     method: "POST",
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify(body),
+  });
+}
+
+export async function signup(email: string, password: string, name?: string) {
+  return request<{ token: string; user: AuthUser }>("/auth/signup", {
+    method: "POST",
+    body: JSON.stringify({ email, password, name }),
+  });
+}
+
+export async function oauthApple(
+  identityToken: string,
+  fullName?: { givenName: string | null; familyName: string | null } | null,
+) {
+  return request<{ token: string; user: AuthUser }>("/auth/oauth/apple", {
+    method: "POST",
+    body: JSON.stringify({ identityToken, fullName: fullName ?? undefined }),
+  });
+}
+
+export async function oauthGoogle(idToken: string) {
+  return request<{ token: string; user: AuthUser }>("/auth/oauth/google", {
+    method: "POST",
+    body: JSON.stringify({ idToken }),
   });
 }
 
@@ -106,6 +138,17 @@ export async function changePassword(
   return request<{ ok: boolean }>("/auth/change-password", {
     method: "POST",
     body: JSON.stringify({ currentPassword, newPassword }),
+    token,
+  });
+}
+
+export async function completeProfile(
+  token: string,
+  body: { email: string; name?: string; newPassword?: string },
+) {
+  return request<{ user: AuthUser }>("/auth/complete-profile", {
+    method: "POST",
+    body: JSON.stringify(body),
     token,
   });
 }

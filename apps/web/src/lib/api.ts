@@ -5,7 +5,10 @@ const SERVER_API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000
 export type AuthUser = {
   id: string;
   username: string;
+  email: string | null;
+  name: string | null;
   mustChangePass: boolean;
+  mustCompleteProfile: boolean;
 };
 
 export type ActionKind = "feeding" | "watering" | "fertilizing" | "treating";
