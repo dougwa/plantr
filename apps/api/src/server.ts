@@ -5,6 +5,7 @@ import multipart from "@fastify/multipart";
 import { env } from "./env.js";
 import authPlugin from "./auth/plugin.js";
 import { authRoutes } from "./auth/routes.js";
+import { siteRoutes } from "./routes/sites.js";
 import { plantRoutes } from "./routes/plants.js";
 import { tagRoutes } from "./routes/tags.js";
 import { photoRoutes } from "./routes/photos.js";
@@ -24,6 +25,7 @@ await app.register(multipart, {
 });
 await app.register(authPlugin);
 await app.register(authRoutes);
+await app.register(siteRoutes);
 await app.register(tagRoutes);
 await app.register(plantRoutes);
 await app.register(photoRoutes);
