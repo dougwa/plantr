@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -78,6 +79,11 @@ function pickDefaultSite(sites: SiteSummary[]): string | null {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({ status: "loading" });
+  // Mirror the latest state so callbacks can read it without listing `state`
+  // as a dep — otherwise every setState invalidates the callbacks and any
+  // effect that lists them in deps will loop.
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   // Sync the api module's current-site singleton during render (not in an
   // effect) so any child screen's mount effects see the correct site. Effects
@@ -228,19 +234,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [state]);
 
   const refreshSites = useCallback(async () => {
-    if (state.status !== "authed") return;
-    const r = await apiListSites(state.token);
+    const snapshot = stateRef.current;
+    if (snapshot.status !== "authed") return;
+    const r = await apiListSites(snapshot.token);
     if (!r.ok) return;
-    // If the previously-selected site disappeared (revoked, deleted), fall
-    // back to the default picker. Otherwise keep the user's selection.
-    const stillPresent = state.currentSiteId
-      ? r.data.sites.some((s) => s.id === state.currentSiteId)
-      : false;
-    const currentSiteId = stillPresent
-      ? state.currentSiteId
-      : pickDefaultSite(r.data.sites);
-    setState({ ...state, sites: r.data.sites, currentSiteId });
-  }, [state]);
+    setState((prev) => {
+      if (prev.status !== "authed") return prev;
+      // If the previously-selected site disappeared (revoked, deleted), fall
+      // back to the default picker. Otherwise keep the user's selection.
+      const stillPresent = prev.currentSiteId
+        ? r.data.sites.some((s) => s.id === prev.currentSiteId)
+        : false;
+      const currentSiteId = stillPresent
+        ? prev.currentSiteId
+        : pickDefaultSite(r.data.sites);
+      return { ...prev, sites: r.data.sites, currentSiteId };
+    });
+  }, []);
 
   const setCurrentSite = useCallback(
     (siteId: string | null) => {

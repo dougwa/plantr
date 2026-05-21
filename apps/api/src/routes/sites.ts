@@ -17,7 +17,7 @@ import {
   isExpired,
 } from "../lib/invitations.js";
 import { dispatch } from "../lib/notifications.js";
-import { planLimits } from "../lib/plans.js";
+import { planLimitsFor } from "../lib/plans.js";
 import {
   canManageMembers,
   canManageSite,
@@ -165,7 +165,7 @@ export const siteRoutes: FastifyPluginAsync = async (app) => {
     // ones — those still count toward the cap during the 30-day retention
     // window so a user can't game it by deleting and re-creating).
     const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-    const limits = planLimits(user.plan);
+    const limits = planLimitsFor(user);
     const ownedCount = await prisma.site.count({ where: { ownerId: userId } });
     if (ownedCount >= limits.ownedSites) {
       return reply.code(402).send({

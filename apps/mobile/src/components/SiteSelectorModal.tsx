@@ -7,12 +7,18 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useAuth } from "../contexts/AuthContext";
-import { unreadNotificationCount, type SiteRole, type SiteSummary } from "../lib/api";
+import {
+  acceptInvitation,
+  unreadNotificationCount,
+  type SiteRole,
+  type SiteSummary,
+} from "../lib/api";
 
 type Destination = "SiteCreate" | "SiteManagement" | "PublicSiteSearch" | "Notifications";
 
@@ -37,6 +43,10 @@ export default function SiteSelectorModal({ visible, onClose, onNavigate }: Prop
   const token = state.status === "authed" ? state.token : null;
   const [refreshing, setRefreshing] = useState(false);
   const [unread, setUnread] = useState<number>(0);
+  const [joinOpen, setJoinOpen] = useState(false);
+  const [joinToken, setJoinToken] = useState("");
+  const [joinBusy, setJoinBusy] = useState(false);
+  const [joinError, setJoinError] = useState<string | null>(null);
 
   const refreshUnread = useCallback(async () => {
     if (!token) return;
@@ -50,6 +60,9 @@ export default function SiteSelectorModal({ visible, onClose, onNavigate }: Prop
     // (a peer kicks you out, an invitation got accepted, etc.).
     refreshSites();
     refreshUnread();
+    setJoinOpen(false);
+    setJoinToken("");
+    setJoinError(null);
   }, [visible, refreshSites, refreshUnread]);
 
   if (state.status !== "authed") return null;
@@ -66,6 +79,38 @@ export default function SiteSelectorModal({ visible, onClose, onNavigate }: Prop
 
   function pick(siteId: string) {
     setCurrentSite(siteId);
+    onClose();
+  }
+
+  async function submitJoin() {
+    if (!token) return;
+    const t = joinToken.trim();
+    if (!t) {
+      setJoinError("Paste an invitation token to continue.");
+      return;
+    }
+    setJoinError(null);
+    setJoinBusy(true);
+    const r = await acceptInvitation(token, t);
+    setJoinBusy(false);
+    if (!r.ok) {
+      setJoinError(
+        r.error === "invitation_not_found"
+          ? "That token doesn't match any invitation."
+          : r.error === "expired"
+            ? "This invitation has expired."
+            : r.error === "already_accepted"
+              ? "This invitation has already been accepted."
+              : r.error === "site_deleted"
+                ? "The site for this invitation no longer exists."
+                : "Could not accept the invitation.",
+      );
+      return;
+    }
+    await refreshSites();
+    setCurrentSite(r.data.site.id);
+    setJoinToken("");
+    setJoinOpen(false);
     onClose();
   }
 
@@ -148,6 +193,47 @@ export default function SiteSelectorModal({ visible, onClose, onNavigate }: Prop
           >
             <Ionicons name="add" size={22} color="#fff" />
             <Text style={styles.createText}>Create a new site</Text>
+          </Pressable>
+
+          {joinOpen ? (
+            <TextInput
+              value={joinToken}
+              placeholder="Paste invitation token"
+              autoCapitalize="none"
+              autoCorrect={false}
+              editable={!joinBusy}
+              autoFocus
+              style={styles.joinInput}
+            />
+          ) : null}
+          {joinError ? <Text style={styles.joinError}>{joinError}</Text> : null}
+          <Pressable
+            disabled={joinBusy || (joinOpen && joinToken.trim().length === 0)}
+            onPress={() => {
+              if (!joinOpen) {
+                setJoinOpen(true);
+                return;
+              }
+              if (joinToken.trim().length > 0) submitJoin();
+            }}
+            style={({ pressed }) => [
+              joinOpen && joinToken.trim().length > 0 ? styles.joinBtnReady : styles.joinBtn,
+              pressed && styles.pressed,
+            ]}
+          >
+            {joinBusy ? (
+              <ActivityIndicator color="#fff" size="small" />
+            ) : joinOpen && joinToken.trim().length > 0 ? (
+              <>
+                <Ionicons name="log-in-outline" size={20} color="#fff" />
+                <Text style={styles.joinBtnReadyText}>Join</Text>
+              </>
+            ) : (
+              <>
+                <Ionicons name="key-outline" size={20} color="#16a34a" />
+                <Text style={styles.joinBtnText}>Join site with invitation token</Text>
+              </>
+            )}
           </Pressable>
 
           {sites.length === 0 ? (
@@ -298,6 +384,41 @@ const styles = StyleSheet.create({
     marginTop: 16,
   },
   createText: { color: "#fff", fontSize: 15, fontWeight: "500" },
+  joinBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    justifyContent: "center",
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 14,
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: "#16a34a",
+  },
+  joinBtnText: { color: "#16a34a", fontSize: 15, fontWeight: "500" },
+  joinBtnReady: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    justifyContent: "center",
+    backgroundColor: "#16a34a",
+    borderRadius: 12,
+    padding: 14,
+    marginTop: 10,
+  },
+  joinBtnReadyText: { color: "#fff", fontSize: 15, fontWeight: "500" },
+  joinInput: {
+    marginTop: 10,
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#d4d4d4",
+    padding: 14,
+    fontSize: 14,
+    color: "#171717",
+  },
+  joinError: { color: "#dc2626", fontSize: 13, marginTop: 8 },
   note: { color: "#737373", fontSize: 12, marginTop: 16, lineHeight: 18 },
   spinner: {
     position: "absolute",

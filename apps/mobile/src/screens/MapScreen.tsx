@@ -299,9 +299,16 @@ export default function MapScreen() {
   const lastFitCountRef = useRef(0);
 
   const token = state.status === "authed" ? state.token : null;
+  const currentSiteId = state.status === "authed" ? state.currentSiteId : null;
 
   const reload = useCallback(async () => {
     if (!token) return;
+    if (!currentSiteId) {
+      setPlants([]);
+      setShapes([]);
+      setTags([]);
+      return;
+    }
     const [pRes, sRes, tRes] = await Promise.all([
       listPlants(token),
       listLocationShapes(token),
@@ -310,7 +317,7 @@ export default function MapScreen() {
     if (pRes.ok) setPlants(pRes.data.plants);
     if (sRes.ok) setShapes(sRes.data.shapes);
     if (tRes.ok) setTags(tRes.data.tags);
-  }, [token]);
+  }, [token, currentSiteId]);
 
   useEffect(() => {
     (async () => {

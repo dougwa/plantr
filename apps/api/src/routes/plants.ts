@@ -6,7 +6,7 @@ import { deletePhotoObjects } from "../lib/photos.js";
 import { signGetUrl } from "../lib/spaces.js";
 import { PLANT_INCLUDE, publicPlant, publicTag } from "../lib/serializers.js";
 import { qrCodeSchema } from "../lib/qr-code.js";
-import { planLimits } from "../lib/plans.js";
+import { planLimitsFor } from "../lib/plans.js";
 import { rejectIfReadOnly } from "../lib/site-access.js";
 import {
   resolveLocationTagIdsForPoint,
@@ -82,7 +82,7 @@ export const plantRoutes: FastifyPluginAsync = async (app) => {
     const owner = await prisma.user.findUniqueOrThrow({
       where: { id: req.site!.ownerId },
     });
-    const limits = planLimits(owner.plan);
+    const limits = planLimitsFor(owner);
     const plantCount = await prisma.plant.count({ where: { siteId } });
     if (plantCount >= limits.plantsPerSite) {
       return reply.code(402).send({
