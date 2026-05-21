@@ -28,6 +28,8 @@ import {
 } from "react-native-gesture-handler";
 import Swipeable from "react-native-gesture-handler/Swipeable";
 import * as ImagePicker from "expo-image-picker";
+import * as Sharing from "expo-sharing";
+import * as FileSystem from "expo-file-system/legacy";
 import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { useAuth } from "../contexts/AuthContext";
@@ -45,16 +47,55 @@ import {
   uploadPhoto,
   type ActionKind,
   type PublicAction,
+  type PublicPhoto,
   type PublicPlant,
   type Tag,
 } from "../lib/api";
 import AuthImage from "../components/AuthImage";
+import { getCachedImageUri } from "../lib/imageCache";
 import ScreenHeader from "../components/ScreenHeader";
 import type { RootStackParamList } from "../navigation/types";
 import type { PlantFilter } from "../navigation/BrowseStackTypes";
 import { tagKindStyle } from "../lib/tagStyle";
 
 type Route = RouteProp<RootStackParamList, "PlantDetail">;
+
+function normalizeExt(ext: string): string {
+  if (ext === "jpeg") return "jpg";
+  if (ext === "heif") return "heic";
+  if (["jpg", "png", "webp", "heic", "gif"].includes(ext)) return ext;
+  return "jpg";
+}
+
+function mimeFromExt(ext: string): string {
+  switch (ext) {
+    case "png":
+      return "image/png";
+    case "webp":
+      return "image/webp";
+    case "heic":
+      return "image/heic";
+    case "gif":
+      return "image/gif";
+    default:
+      return "image/jpeg";
+  }
+}
+
+function utiFromExt(ext: string): string {
+  switch (ext) {
+    case "png":
+      return "public.png";
+    case "webp":
+      return "org.webmproject.webp";
+    case "heic":
+      return "public.heic";
+    case "gif":
+      return "com.compuserve.gif";
+    default:
+      return "public.jpeg";
+  }
+}
 
 const ACTION_KINDS: { kind: ActionKind; label: string; icon: keyof typeof Ionicons.glyphMap }[] = [
   { kind: "feeding", label: "Feed", icon: "nutrition-outline" },
@@ -209,13 +250,57 @@ export default function PlantDetailScreen() {
     await reload();
   }
 
-  function showPhotoMenu(photoId: string, isCover: boolean) {
+  async function sharePhoto(photo: PublicPhoto) {
+    try {
+      const available = await Sharing.isAvailableAsync();
+      if (!available) {
+        Alert.alert("Sharing unavailable", "This device does not support sharing.");
+        return;
+      }
+      const url = photo.urls.original;
+      const q = url.indexOf("?");
+      const pathPart = q === -1 ? url : url.slice(0, q);
+      const dot = pathPart.lastIndexOf(".");
+      const rawExt = dot === -1 ? "" : pathPart.slice(dot + 1).toLowerCase();
+      const ext = normalizeExt(rawExt);
+      const cachedUri = await getCachedImageUri(url, pathPart);
+
+      const safeName =
+        (plant?.name ?? "")
+          .replace(/[\x00-\x1f\x7f/\\:*?"<>|]/g, "_")
+          .replace(/^\.+|[. ]+$/g, "")
+          .trim() || "photo";
+      const shareDir = `${FileSystem.cacheDirectory}plantr-share/`;
+      const dirInfo = await FileSystem.getInfoAsync(shareDir);
+      if (!dirInfo.exists) {
+        await FileSystem.makeDirectoryAsync(shareDir, { intermediates: true });
+      }
+      const shareUri = `${shareDir}${safeName}.${ext}`;
+      const existing = await FileSystem.getInfoAsync(shareUri);
+      if (existing.exists) {
+        await FileSystem.deleteAsync(shareUri, { idempotent: true });
+      }
+      await FileSystem.copyAsync({ from: cachedUri, to: shareUri });
+
+      await Sharing.shareAsync(shareUri, {
+        mimeType: mimeFromExt(ext),
+        UTI: utiFromExt(ext),
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      Alert.alert("Share failed", msg);
+    }
+  }
+
+  function showPhotoMenu(photo: PublicPhoto, isCover: boolean) {
     if (!token || !plant) return;
+    const photoId = photo.id;
     const options = isCover
-      ? ["Cancel", "Delete"]
-      : ["Cancel", "Set as Cover", "Delete"];
+      ? ["Cancel", "Share", "Delete"]
+      : ["Cancel", "Set as Cover", "Share", "Delete"];
     const cancelButtonIndex = 0;
-    const destructiveButtonIndex = isCover ? 1 : 2;
+    const shareIndex = isCover ? 1 : 2;
+    const destructiveButtonIndex = isCover ? 2 : 3;
 
     const handle = async (index: number) => {
       if (Platform.OS === "ios") {
@@ -223,6 +308,8 @@ export default function PlantDetailScreen() {
           const r = await setCoverPhoto(token, photoId);
           if (r.ok) setPlant(r.data.plant);
           else Alert.alert("Failed", r.error);
+        } else if (index === shareIndex) {
+          sharePhoto(photo);
         } else if (index === destructiveButtonIndex) {
           confirmDelete(photoId);
         }
@@ -249,6 +336,10 @@ export default function PlantDetailScreen() {
           },
         });
       }
+      buttons.push({
+        text: "Share",
+        onPress: () => sharePhoto(photo),
+      });
       buttons.push({
         text: "Delete",
         style: "destructive",
@@ -505,7 +596,7 @@ export default function PlantDetailScreen() {
               <Pressable
                 key={p.id}
                 onPress={() => setLightboxIndex(i)}
-                onLongPress={() => showPhotoMenu(p.id, p.id === plant.coverPhoto?.id)}
+                onLongPress={() => showPhotoMenu(p, p.id === plant.coverPhoto?.id)}
                 delayLongPress={400}
                 style={styles.thumbWrap}
               >
@@ -589,13 +680,19 @@ export default function PlantDetailScreen() {
                 })}
                 keyExtractor={(p) => p.id}
                 renderItem={({ item }) => (
-                  <View style={{ width: winW, height: winH, alignItems: "center", justifyContent: "center" }}>
+                  <Pressable
+                    onLongPress={() =>
+                      showPhotoMenu(item, item.id === plant.coverPhoto?.id)
+                    }
+                    delayLongPress={400}
+                    style={{ width: winW, height: winH, alignItems: "center", justifyContent: "center" }}
+                  >
                     <AuthImage
                       path={item.urls.cover}
                       style={{ width: winW, height: winH }}
                       resizeMode="contain"
                     />
-                  </View>
+                  </Pressable>
                 )}
                 onMomentumScrollEnd={(e) => {
                   const idx = Math.round(e.nativeEvent.contentOffset.x / winW);
