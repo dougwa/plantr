@@ -2,15 +2,17 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Modal,
+  Platform,
   Pressable,
   RefreshControl,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useAuth } from "../contexts/AuthContext";
 import {
@@ -41,6 +43,14 @@ const ROLE_LABEL: Record<SiteRole, string> = {
 export default function SiteSelectorModal({ visible, onClose, onNavigate }: Props) {
   const { state, refreshSites, setCurrentSite } = useAuth();
   const token = state.status === "authed" ? state.token : null;
+  // RN Modal renders in a separate native view tree; the SafeAreaView edges
+  // inside don't always pick up the status-bar inset, so we apply an explicit
+  // top pad with a sensible minimum (44pt on iOS, StatusBar.currentHeight on
+  // Android) to guarantee the bell icon clears the system status bar.
+  const insets = useSafeAreaInsets();
+  const minTop =
+    Platform.OS === "android" ? StatusBar.currentHeight ?? 24 : 44;
+  const topPad = Math.max(insets.top, minTop);
   const [refreshing, setRefreshing] = useState(false);
   const [unread, setUnread] = useState<number>(0);
   const [joinOpen, setJoinOpen] = useState(false);
@@ -122,8 +132,8 @@ export default function SiteSelectorModal({ visible, onClose, onNavigate }: Prop
         if (hasCurrent) onClose();
       }}
     >
-      <SafeAreaView style={styles.root} edges={["top"]}>
-        <View style={styles.titleRow}>
+      <SafeAreaView style={styles.root} edges={["bottom"]}>
+        <View style={[styles.titleRow, { paddingTop: topPad + 4 }]}>
           <Text style={styles.h1}>Sites</Text>
           <View style={styles.titleActions}>
             <Pressable
@@ -298,7 +308,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 16,
-    paddingTop: 8,
     paddingBottom: 12,
   },
   titleActions: { flexDirection: "row", alignItems: "center", gap: 8 },

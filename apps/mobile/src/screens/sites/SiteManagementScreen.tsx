@@ -23,6 +23,7 @@ import {
   listInvitations,
   listSiteMembers,
   patchSite,
+  transferSiteOwnership,
   type InvitationSummary,
   type SiteMember,
   type SiteRole,
@@ -52,6 +53,7 @@ export default function SiteManagementScreen() {
   const [renaming, setRenaming] = useState(false);
   const [nextName, setNextName] = useState("");
   const [working, setWorking] = useState(false);
+  const [transferOpen, setTransferOpen] = useState(false);
 
   const site: SiteSummary | undefined =
     state.status === "authed" ? state.sites.find((s) => s.id === siteId) : undefined;
@@ -146,6 +148,74 @@ export default function SiteManagementScreen() {
         },
       },
     ]);
+  }
+
+  const transferTargets =
+    members?.filter((m) => m.user.id !== site!.owner.id) ?? [];
+  const pendingOwnerOffer =
+    invitations?.find((inv) => inv.role === "OWNER" && !inv.acceptedAt) ?? null;
+
+  function confirmTransfer(member: SiteMember) {
+    setTransferOpen(false);
+    const display = member.user.name ?? member.user.username;
+    Alert.alert(
+      `Transfer ownership to ${display}?`,
+      "They'll receive an ownership offer that expires in 7 days. Once they accept, they become the owner and you switch to Admin. You keep full access until then.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Send offer",
+          style: "destructive",
+          onPress: async () => {
+            if (!token) return;
+            setWorking(true);
+            const r = await transferSiteOwnership(token, siteId, member.user.id);
+            setWorking(false);
+            if (!r.ok) {
+              Alert.alert(
+                "Could not transfer",
+                r.error === "target_not_member"
+                  ? "That person needs to be a member of the site before you can transfer to them."
+                  : r.error === "already_owner"
+                    ? "That person is already the owner."
+                    : r.error,
+              );
+              return;
+            }
+            await loadInvitations();
+            Alert.alert(
+              "Offer sent",
+              `${display} will see the ownership offer next time they sign in. You'll keep full access until they accept.`,
+            );
+          },
+        },
+      ],
+    );
+  }
+
+  async function revokeOwnerOffer() {
+    if (!token || !pendingOwnerOffer) return;
+    Alert.alert(
+      "Cancel ownership offer?",
+      "The pending offer will be revoked. You can send a new one later.",
+      [
+        { text: "Keep", style: "cancel" },
+        {
+          text: "Cancel offer",
+          style: "destructive",
+          onPress: async () => {
+            setWorking(true);
+            const r = await deleteInvitation(token, siteId, pendingOwnerOffer.id);
+            setWorking(false);
+            if (!r.ok) {
+              Alert.alert("Could not cancel", r.error);
+              return;
+            }
+            await loadInvitations();
+          },
+        },
+      ],
+    );
   }
 
   function confirmDelete() {
@@ -290,7 +360,10 @@ export default function SiteManagementScreen() {
                       {inv.email ?? inv.phone ?? "Unknown invitee"}
                     </Text>
                     <Text style={styles.memberMeta}>
-                      {ROLE_LABEL[inv.role]} · expires {formatDate(inv.expiresAt)}
+                      {inv.role === "OWNER"
+                        ? "Ownership transfer"
+                        : ROLE_LABEL[inv.role]}{" "}
+                      · expires {formatDate(inv.expiresAt)}
                     </Text>
                   </View>
                   <Pressable
@@ -317,14 +390,51 @@ export default function SiteManagementScreen() {
         ) : null}
 
         {isOwner ? (
-          <Pressable
-            onPress={confirmDelete}
-            disabled={working}
-            style={({ pressed }) => [styles.danger, (pressed || working) && { opacity: 0.7 }]}
-          >
-            <Ionicons name="trash-outline" size={18} color="#dc2626" />
-            <Text style={styles.dangerText}>Delete site</Text>
-          </Pressable>
+          <>
+            {pendingOwnerOffer ? (
+              <View style={styles.offerBanner}>
+                <Ionicons name="swap-horizontal" size={18} color="#92400e" />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.offerTitle}>Ownership offer pending</Text>
+                  <Text style={styles.offerBody}>
+                    {pendingOwnerOffer.email ?? "The invitee"} hasn't accepted
+                    yet. You stay the owner until they do.
+                  </Text>
+                </View>
+                <Pressable onPress={revokeOwnerOffer} hitSlop={8}>
+                  <Text style={styles.offerCancel}>Cancel</Text>
+                </Pressable>
+              </View>
+            ) : null}
+            <Pressable
+              onPress={() => {
+                if (transferTargets.length === 0) {
+                  Alert.alert(
+                    "No eligible members",
+                    "Invite someone to the site first, then you can transfer ownership to them.",
+                  );
+                  return;
+                }
+                setTransferOpen(true);
+              }}
+              disabled={working}
+              style={({ pressed }) => [
+                styles.neutralAction,
+                (pressed || working) && { opacity: 0.7 },
+              ]}
+            >
+              <Ionicons name="swap-horizontal" size={18} color="#525252" />
+              <Text style={styles.neutralActionText}>Transfer ownership</Text>
+            </Pressable>
+            <Pressable
+              onPress={confirmDelete}
+              disabled={working}
+              style={({ pressed }) => [styles.danger, (pressed || working) && { opacity: 0.7 }]}
+            >
+              <Ionicons name="trash-outline" size={18} color="#dc2626" />
+              <Text style={styles.dangerText}>Delete site</Text>
+            </Pressable>
+          </>
         ) : (
           <Pressable
             onPress={confirmLeave}
@@ -336,6 +446,60 @@ export default function SiteManagementScreen() {
           </Pressable>
         )}
       </ScrollView>
+
+      <Modal
+        visible={transferOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setTransferOpen(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setTransferOpen(false)}>
+          <Pressable style={styles.modalSheet} onPress={() => {}}>
+            <Text style={styles.modalTitle}>Transfer ownership</Text>
+            <Text style={styles.modalHint}>
+              Pick a current member. They'll receive an ownership offer that
+              expires in 7 days. They become the owner once they accept —
+              you'll switch to Admin then.
+            </Text>
+            <ScrollView style={styles.transferList}>
+              {transferTargets.length === 0 ? (
+                <Text style={styles.muted}>
+                  Invite a member first, then you can transfer to them.
+                </Text>
+              ) : (
+                transferTargets.map((m) => (
+                  <Pressable
+                    key={m.id}
+                    onPress={() => confirmTransfer(m)}
+                    style={({ pressed }) => [
+                      styles.pickerRow,
+                      pressed && { backgroundColor: "#f5f5f5" },
+                    ]}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.memberName}>
+                        {m.user.name ?? m.user.username}
+                      </Text>
+                      <Text style={styles.memberMeta}>
+                        {m.user.email ?? m.user.username} · {ROLE_LABEL[m.role]}
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color="#a3a3a3" />
+                  </Pressable>
+                ))
+              )}
+            </ScrollView>
+            <View style={styles.modalButtons}>
+              <Pressable
+                onPress={() => setTransferOpen(false)}
+                style={styles.modalCancel}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       <Modal
         visible={renaming}
@@ -478,7 +642,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
-    marginTop: 32,
+    marginTop: 12,
     padding: 14,
     borderRadius: 10,
     borderWidth: 1,
@@ -486,6 +650,45 @@ const styles = StyleSheet.create({
     backgroundColor: "#fff",
   },
   dangerText: { color: "#dc2626", fontSize: 15, fontWeight: "500" },
+
+  neutralAction: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    marginTop: 32,
+    padding: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#d4d4d4",
+    backgroundColor: "#fff",
+  },
+  neutralActionText: { color: "#525252", fontSize: 15, fontWeight: "500" },
+
+  offerBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    marginTop: 32,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: "#fcd34d",
+    backgroundColor: "#fffbeb",
+  },
+  offerTitle: { color: "#92400e", fontSize: 14, fontWeight: "600" },
+  offerBody: { color: "#92400e", fontSize: 12, marginTop: 2, lineHeight: 16 },
+  offerCancel: { color: "#92400e", fontSize: 13, fontWeight: "500" },
+
+  modalHint: { color: "#525252", fontSize: 13, lineHeight: 18, marginBottom: 12 },
+  transferList: { maxHeight: 320 },
+  pickerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#f5f5f5",
+  },
 
   modalBackdrop: {
     flex: 1,
