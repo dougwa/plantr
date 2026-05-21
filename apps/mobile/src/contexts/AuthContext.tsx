@@ -192,24 +192,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const signOut = useCallback(async () => {
-    if (state.status === "authed") await apiLogout(state.token);
+    const snapshot = stateRef.current;
+    if (snapshot.status === "authed") await apiLogout(snapshot.token);
     await clearToken();
     await saveCurrentSiteId(null).catch(() => {});
     setState({ status: "anon" });
-  }, [state]);
+  }, []);
 
   const changePassword = useCallback(
     async (currentPassword: string, newPassword: string): Promise<Result> => {
-      if (state.status !== "authed") return { ok: false, error: "not_authed" };
-      const result = await apiChangePassword(state.token, currentPassword, newPassword);
+      const snapshot = stateRef.current;
+      if (snapshot.status !== "authed") return { ok: false, error: "not_authed" };
+      const result = await apiChangePassword(snapshot.token, currentPassword, newPassword);
       if (!result.ok) return { ok: false, error: result.error };
-      const refreshed = await apiFetchMe(state.token);
+      const refreshed = await apiFetchMe(snapshot.token);
       if (refreshed) {
-        setState({ ...state, user: refreshed });
+        setState((prev) => (prev.status === "authed" ? { ...prev, user: refreshed } : prev));
       }
       return { ok: true };
     },
-    [state],
+    [],
   );
 
   const completeProfile = useCallback(
@@ -218,20 +220,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       name?: string;
       newPassword?: string;
     }): Promise<Result> => {
-      if (state.status !== "authed") return { ok: false, error: "not_authed" };
-      const result = await apiCompleteProfile(state.token, body);
+      const snapshot = stateRef.current;
+      if (snapshot.status !== "authed") return { ok: false, error: "not_authed" };
+      const result = await apiCompleteProfile(snapshot.token, body);
       if (!result.ok) return { ok: false, error: result.error };
-      setState({ ...state, user: result.data.user });
+      setState((prev) =>
+        prev.status === "authed" ? { ...prev, user: result.data.user } : prev,
+      );
       return { ok: true };
     },
-    [state],
+    [],
   );
 
   const refreshUser = useCallback(async () => {
-    if (state.status !== "authed") return;
-    const refreshed = await apiFetchMe(state.token);
-    if (refreshed) setState({ ...state, user: refreshed });
-  }, [state]);
+    const snapshot = stateRef.current;
+    if (snapshot.status !== "authed") return;
+    const refreshed = await apiFetchMe(snapshot.token);
+    if (refreshed) {
+      setState((prev) => (prev.status === "authed" ? { ...prev, user: refreshed } : prev));
+    }
+  }, []);
 
   const refreshSites = useCallback(async () => {
     const snapshot = stateRef.current;
@@ -252,13 +260,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const setCurrentSite = useCallback(
-    (siteId: string | null) => {
-      if (state.status !== "authed") return;
-      setState({ ...state, currentSiteId: siteId });
-    },
-    [state],
-  );
+  const setCurrentSite = useCallback((siteId: string | null) => {
+    setState((prev) =>
+      prev.status === "authed" ? { ...prev, currentSiteId: siteId } : prev,
+    );
+  }, []);
 
   const value = useMemo(
     () => ({

@@ -563,9 +563,20 @@ export default function MapScreen() {
     time: 0,
     shapeId: null,
   });
+  // react-native-maps does not reliably stop marker presses from also firing
+  // the map's onPress on every platform. Without this guard, pressing an
+  // action chip (e.g. polygon +/-) would deselect the shape.
+  const lastChipPressRef = useRef(0);
+  function noteChipPress<A extends unknown[]>(fn: (...args: A) => unknown) {
+    return (...args: A) => {
+      lastChipPressRef.current = Date.now();
+      fn(...args);
+    };
+  }
 
   function handleTap(coord: LatLng) {
     const now = Date.now();
+    if (now - lastChipPressRef.current < 300) return;
     const s = findShapeAt(coord);
     const last = lastTapRef.current;
     lastTapRef.current = { time: now, shapeId: s?.id ?? null };
@@ -1129,13 +1140,17 @@ export default function MapScreen() {
               onMoveEnd={persistMove}
               onVertexDrag={applyPolygonVertex}
               onVertexDragEnd={persistPolygonVertex}
-              onAddPoint={addPolygonPoint}
-              onRemovePoint={removePolygonPoint}
-              onTapName={() =>
-                setSubModal({ kind: "name", shapeId: editing.id, value: editing.name ?? "" })
-              }
-              onTapColor={() => setSubModal({ kind: "color", shapeId: editing.id })}
-              onTapDelete={() => setSubModal({ kind: "delete", shapeId: editing.id })}
+              onAddPoint={noteChipPress(addPolygonPoint)}
+              onRemovePoint={noteChipPress(removePolygonPoint)}
+              onTapName={noteChipPress(() =>
+                setSubModal({ kind: "name", shapeId: editing.id, value: editing.name ?? "" }),
+              )}
+              onTapColor={noteChipPress(() =>
+                setSubModal({ kind: "color", shapeId: editing.id }),
+              )}
+              onTapDelete={noteChipPress(() =>
+                setSubModal({ kind: "delete", shapeId: editing.id }),
+              )}
             />
           : editing && <EditOverlay
               shape={editing}
@@ -1148,15 +1163,19 @@ export default function MapScreen() {
               onResizeEnd={persistResize}
               onRotateDrag={(e) => applyRotate(e.nativeEvent.coordinate)}
               onRotateEnd={persistRotate}
-              onTapName={() =>
+              onTapName={noteChipPress(() =>
                 setSubModal({
                   kind: "name",
                   shapeId: editing.id,
                   value: editing.name ?? "",
-                })
-              }
-              onTapColor={() => setSubModal({ kind: "color", shapeId: editing.id })}
-              onTapDelete={() => setSubModal({ kind: "delete", shapeId: editing.id })}
+                }),
+              )}
+              onTapColor={noteChipPress(() =>
+                setSubModal({ kind: "color", shapeId: editing.id }),
+              )}
+              onTapDelete={noteChipPress(() =>
+                setSubModal({ kind: "delete", shapeId: editing.id }),
+              )}
             />
         }
       </MapView>
