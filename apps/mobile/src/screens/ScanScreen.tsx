@@ -19,8 +19,8 @@ import {
   loadEnabledBarcodeTypes,
   type BarcodeType,
 } from "../lib/scannerTypes";
-import * as Location from "expo-location";
 import Ionicons from "@expo/vector-icons/Ionicons";
+import { getAccurateGps } from "../lib/gps";
 import {
   SafeAreaView,
   useSafeAreaInsets,
@@ -145,12 +145,13 @@ export default function ScanScreen() {
 
   async function getGps(): Promise<{ lat?: number; lng?: number }> {
     try {
-      const perm = await Location.requestForegroundPermissionsAsync();
-      if (perm.status !== "granted") return {};
-      const pos = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Highest,
+      const fix = await getAccurateGps({
+        timeoutMs: 6000,
+        targetAccuracyMeters: 5,
+        maxAccuracyMeters: 20,
       });
-      return { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      if (!fix) return {};
+      return { lat: fix.lat, lng: fix.lng };
     } catch (err) {
       console.warn("getGps failed", err);
       return {};

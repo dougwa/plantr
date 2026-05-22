@@ -27,6 +27,7 @@ import MapView, {
 } from "react-native-maps";
 import * as Location from "expo-location";
 import Ionicons from "@expo/vector-icons/Ionicons";
+import { getAccurateGps } from "../lib/gps";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
@@ -662,16 +663,16 @@ export default function MapScreen() {
         );
         return;
       }
-      const pos = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Highest,
+      const fix = await getAccurateGps({
+        timeoutMs: 4000,
+        targetAccuracyMeters: 10,
+        maxAccuracyMeters: Infinity,
       });
+      if (!fix) return;
       const cam = await mapRef.current?.getCamera();
       mapRef.current?.animateCamera(
         {
-          center: {
-            latitude: pos.coords.latitude,
-            longitude: pos.coords.longitude,
-          },
+          center: { latitude: fix.lat, longitude: fix.lng },
           zoom: cam?.zoom ?? 18,
           altitude: cam?.altitude ?? 200,
           pitch: cam?.pitch ?? 0,
