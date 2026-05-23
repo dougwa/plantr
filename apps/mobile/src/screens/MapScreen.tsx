@@ -649,8 +649,9 @@ export default function MapScreen() {
   }
 
   function pickFromCluster(plantId: string) {
+    const plantIds = picker?.map((p) => p.id);
     setPicker(null);
-    nav.push("PlantDetail", { plantId });
+    nav.push("PlantDetail", { plantId, plantIds });
   }
 
   async function recenterOnUser() {

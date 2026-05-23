@@ -13,7 +13,7 @@ export type RootStackParamList = {
   BrowseEntries: { category: BrowseCategory };
   BrowseSearch: undefined;
   PlantList: { filter: PlantFilter; title: string };
-  PlantDetail: { plantId: string };
+  PlantDetail: { plantId: string; plantIds?: string[] };
   Scan: undefined;
 };
 

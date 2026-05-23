@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActionSheetIOS,
   ActivityIndicator,
@@ -171,28 +171,103 @@ export default function PlantDetailScreen() {
 
   const token = state.status === "authed" ? state.token : null;
 
+  const plantIds = useMemo<string[]>(() => {
+    const ids = route.params.plantIds;
+    if (ids && ids.length > 0) return ids;
+    return [route.params.plantId];
+  }, [route.params.plantIds, route.params.plantId]);
+  const initialIdx = useMemo(() => {
+    const idx = plantIds.indexOf(route.params.plantId);
+    return idx >= 0 ? idx : 0;
+  }, [plantIds, route.params.plantId]);
+  const [currentIdx, setCurrentIdx] = useState(initialIdx);
+  const currentPlantId = plantIds[currentIdx] ?? route.params.plantId;
+  const swipeEnabled = plantIds.length > 1;
+
+  const [plantCache, setPlantCache] = useState<Map<string, PublicPlant>>(
+    () => new Map(),
+  );
+  const plantCacheRef = useRef(plantCache);
+  useEffect(() => {
+    plantCacheRef.current = plantCache;
+  }, [plantCache]);
+  const inflightRef = useRef<Set<string>>(new Set());
+  const pagerRef = useRef<FlatList<string>>(null);
+
+  const updatePlant = useCallback((p: PublicPlant) => {
+    setPlant(p);
+    setPlantCache((c) => {
+      const next = new Map(c);
+      next.set(p.id, p);
+      return next;
+    });
+  }, []);
+
   const reload = useCallback(async () => {
     if (!token) return;
-    const r = await getPlant(token, route.params.plantId);
-    if (r.ok) setPlant(r.data.plant);
-  }, [token, route.params.plantId]);
+    const r = await getPlant(token, currentPlantId);
+    if (r.ok) updatePlant(r.data.plant);
+  }, [token, currentPlantId, updatePlant]);
 
   useEffect(() => {
+    if (!token) return;
     (async () => {
-      setLoading(true);
-      await reload();
-      if (token) {
-        const t = await listTags(token);
-        if (t.ok) setTags(t.data.tags);
-      }
-      setLoading(false);
+      const t = await listTags(token);
+      if (t.ok) setTags(t.data.tags);
     })();
-  }, [reload, token]);
+  }, [token]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const cached = plantCacheRef.current.get(currentPlantId);
+    if (cached) {
+      setPlant(cached);
+      setLoading(false);
+    } else {
+      setLoading(true);
+      setPlant(null);
+    }
+    (async () => {
+      await reload();
+      if (!cancelled) setLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [reload, currentPlantId]);
+
+  useEffect(() => {
+    if (!token) return;
+    const ensure = async (id: string) => {
+      if (plantCacheRef.current.has(id)) return;
+      if (inflightRef.current.has(id)) return;
+      inflightRef.current.add(id);
+      try {
+        const r = await getPlant(token, id);
+        if (r.ok) {
+          setPlantCache((c) => {
+            const next = new Map(c);
+            next.set(id, r.data.plant);
+            return next;
+          });
+        }
+      } finally {
+        inflightRef.current.delete(id);
+      }
+    };
+    if (currentIdx > 0) ensure(plantIds[currentIdx - 1]);
+    if (currentIdx < plantIds.length - 1) ensure(plantIds[currentIdx + 1]);
+  }, [token, currentIdx, plantIds]);
+
+  const pagerExtraData = useMemo(
+    () => ({ currentIdx, plantCache }),
+    [currentIdx, plantCache],
+  );
 
   async function patch(data: Parameters<typeof patchPlant>[2]) {
     if (!token || !plant) return;
     const r = await patchPlant(token, plant.id, data);
-    if (r.ok) setPlant(r.data.plant);
+    if (r.ok) updatePlant(r.data.plant);
     else Alert.alert("Save failed", r.error);
   }
 
@@ -306,7 +381,7 @@ export default function PlantDetailScreen() {
       if (Platform.OS === "ios") {
         if (!isCover && index === 1) {
           const r = await setCoverPhoto(token, photoId);
-          if (r.ok) setPlant(r.data.plant);
+          if (r.ok) updatePlant(r.data.plant);
           else Alert.alert("Failed", r.error);
         } else if (index === shareIndex) {
           sharePhoto(photo);
@@ -332,7 +407,7 @@ export default function PlantDetailScreen() {
           text: "Set as Cover",
           onPress: async () => {
             const r = await setCoverPhoto(token, photoId);
-            if (r.ok) setPlant(r.data.plant);
+            if (r.ok) updatePlant(r.data.plant);
           },
         });
       }
@@ -444,7 +519,7 @@ export default function PlantDetailScreen() {
         Alert.alert("Reset failed", r.error);
         return;
       }
-      setPlant(r.data.plant);
+      updatePlant(r.data.plant);
     }
   }
 
@@ -458,21 +533,23 @@ export default function PlantDetailScreen() {
     nav.push("PlantList", { filter, title: tag.name });
   }
 
-  if (loading || !plant) {
-    return (
-      <View style={styles.loading}>
-        <ActivityIndicator />
-      </View>
-    );
-  }
+  const renderLoading = () => (
+    <View style={styles.loading}>
+      <ActivityIndicator />
+    </View>
+  );
 
-  return (
-    <View style={styles.root}>
+  const renderBody = (p: PublicPlant, interactive: boolean) => (
+    <Fragment>
       <ScreenHeader
-        title={plant.qrCode}
+        title={p.qrCode}
         onBack={() => nav.goBack()}
         right={
-          <Pressable ref={ellipsisRef} onPress={openMenu} hitSlop={12}>
+          <Pressable
+            ref={interactive ? ellipsisRef : null}
+            onPress={openMenu}
+            hitSlop={12}
+          >
             <Ionicons name="ellipsis-horizontal" size={24} color="#171717" />
           </Pressable>
         }
@@ -483,15 +560,15 @@ export default function PlantDetailScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await reload(); setRefreshing(false); }} />}
       >
         <View style={styles.coverWrap}>
-          {plant.coverPhoto ? (
+          {p.coverPhoto ? (
             <Pressable
               onPress={() => {
-                const idx = plant.photos.findIndex((p) => p.id === plant.coverPhoto!.id);
+                const idx = p.photos.findIndex((ph) => ph.id === p.coverPhoto!.id);
                 setLightboxIndex(idx >= 0 ? idx : 0);
               }}
             >
               <AuthImage
-                path={plant.coverPhoto.urls.cover}
+                path={p.coverPhoto.urls.cover}
                 style={styles.cover}
                 resizeMode="cover"
               />
@@ -507,14 +584,14 @@ export default function PlantDetailScreen() {
         <View style={styles.section}>
           <EditableText
             label="Name"
-            value={plant.name}
+            value={p.name}
             placeholder="Add a name"
             onSave={(v) => patch({ name: v || null })}
             big
           />
           {(() => {
-            const customTags = plant.tags.filter((t) => t.kind === "custom");
-            const locationTags = plant.tags.filter((t) => t.kind === "location");
+            const customTags = p.tags.filter((t) => t.kind === "custom");
+            const locationTags = p.tags.filter((t) => t.kind === "location");
             return (
               <>
                 <View style={[styles.row, styles.rowMultiline]}>
@@ -575,14 +652,14 @@ export default function PlantDetailScreen() {
           })()}
           <EditableText
             label="Description"
-            value={plant.description}
+            value={p.description}
             placeholder="Add description"
             onSave={(v) => patch({ description: v || null })}
             multiline
           />
           <EditableText
             label="Notes"
-            value={plant.notes}
+            value={p.notes}
             placeholder="Add notes"
             onSave={(v) => patch({ notes: v || null })}
             multiline
@@ -592,16 +669,16 @@ export default function PlantDetailScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Photos</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            {plant.photos.map((p, i) => (
+            {p.photos.map((ph, i) => (
               <Pressable
-                key={p.id}
+                key={ph.id}
                 onPress={() => setLightboxIndex(i)}
-                onLongPress={() => showPhotoMenu(p, p.id === plant.coverPhoto?.id)}
+                onLongPress={() => showPhotoMenu(ph, ph.id === p.coverPhoto?.id)}
                 delayLongPress={400}
                 style={styles.thumbWrap}
               >
-                <AuthImage path={p.urls.thumb} style={styles.thumb} resizeMode="cover" />
-                {p.id === plant.coverPhoto?.id && (
+                <AuthImage path={ph.urls.thumb} style={styles.thumb} resizeMode="cover" />
+                {ph.id === p.coverPhoto?.id && (
                   <View style={styles.coverBadge}>
                     <Ionicons name="star" size={12} color="#fff" />
                   </View>
@@ -631,10 +708,10 @@ export default function PlantDetailScreen() {
             ))}
           </View>
           <View style={styles.actionLog}>
-            {plant.actions.length === 0 ? (
+            {p.actions.length === 0 ? (
               <Text style={styles.emptyText}>No actions yet.</Text>
             ) : (
-              plant.actions.map((a) => (
+              p.actions.map((a) => (
                 <ActionRow
                   key={a.id}
                   action={a}
@@ -646,7 +723,59 @@ export default function PlantDetailScreen() {
           </View>
         </View>
       </ScrollView>
+    </Fragment>
+  );
 
+  return (
+    <View style={styles.root}>
+      {!swipeEnabled ? (
+        loading || !plant ? renderLoading() : renderBody(plant, true)
+      ) : (
+        <FlatList
+          ref={pagerRef}
+          style={styles.pager}
+          data={plantIds}
+          horizontal
+          pagingEnabled
+          showsHorizontalScrollIndicator={false}
+          initialScrollIndex={initialIdx}
+          getItemLayout={(_, i) => ({
+            length: winW,
+            offset: winW * i,
+            index: i,
+          })}
+          keyExtractor={(id) => id}
+          windowSize={3}
+          extraData={pagerExtraData}
+          decelerationRate="fast"
+          renderItem={({ item, index }) => {
+            const cached = plantCache.get(item);
+            const isCurrent = index === currentIdx;
+            return (
+              <View
+                style={{ width: winW, height: "100%" }}
+                pointerEvents={isCurrent ? "auto" : "none"}
+              >
+                {cached ? renderBody(cached, isCurrent) : renderLoading()}
+              </View>
+            );
+          }}
+          onMomentumScrollEnd={(e) => {
+            const idx = Math.round(e.nativeEvent.contentOffset.x / winW);
+            if (idx !== currentIdx) setCurrentIdx(idx);
+          }}
+          onScrollToIndexFailed={(info) => {
+            setTimeout(() => {
+              pagerRef.current?.scrollToOffset({
+                offset: info.index * winW,
+                animated: false,
+              });
+            }, 100);
+          }}
+        />
+      )}
+
+      {plant && (<>
       <Modal
         visible={lightboxIndex !== null}
         animationType="fade"
@@ -880,6 +1009,7 @@ export default function PlantDetailScreen() {
           </Pressable>
         )}
       </Modal>
+      </>)}
     </View>
   );
 }
@@ -1110,6 +1240,7 @@ function ActionRow({
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#fafafa" },
+  pager: { flex: 1 },
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
   scroll: { paddingBottom: 32 },
 

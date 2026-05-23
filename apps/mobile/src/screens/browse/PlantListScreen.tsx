@@ -167,7 +167,7 @@ export default function PlantListScreen() {
   );
 
   function open(plantId: string) {
-    nav.push("PlantDetail", { plantId });
+    nav.push("PlantDetail", { plantId, plantIds: filtered.map((p) => p.id) });
   }
 
   // For a location-filter list, find the underlying location shape so we can

@@ -248,7 +248,7 @@ export default function BrowseSearchScreen() {
   }
 
   function open(plantId: string) {
-    nav.push("PlantDetail", { plantId });
+    nav.push("PlantDetail", { plantId, plantIds: results.map((p) => p.id) });
   }
 
   return (
