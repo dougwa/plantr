@@ -52,6 +52,7 @@ import {
   type Tag,
 } from "../lib/api";
 import AuthImage from "../components/AuthImage";
+import ZoomablePhoto from "../components/ZoomablePhoto";
 import { getCachedImageUri } from "../lib/imageCache";
 import ScreenHeader from "../components/ScreenHeader";
 import type { RootStackParamList } from "../navigation/types";
@@ -123,11 +124,15 @@ export default function PlantDetailScreen() {
   const [confirmInput, setConfirmInput] = useState<"delete" | "reset" | null>(null);
   const [applying, setApplying] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [lightboxZoomed, setLightboxZoomed] = useState(false);
+  const [zoomResetSignal, setZoomResetSignal] = useState(0);
   const { width: winW, height: winH } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const dragY = useRef(new Animated.Value(0)).current;
   const closeLightbox = useCallback(() => {
     dragY.setValue(0);
+    setLightboxZoomed(false);
+    setZoomResetSignal((n) => n + 1);
     setLightboxIndex(null);
   }, [dragY]);
   const onLightboxPan = useCallback(
@@ -788,6 +793,7 @@ export default function PlantDetailScreen() {
             pointerEvents="none"
           />
           <PanGestureHandler
+            enabled={!lightboxZoomed}
             activeOffsetY={[-9999, 12]}
             failOffsetX={[-12, 12]}
             onGestureEvent={onLightboxPan}
@@ -800,6 +806,7 @@ export default function PlantDetailScreen() {
                 data={plant.photos}
                 horizontal
                 pagingEnabled
+                scrollEnabled={!lightboxZoomed}
                 showsHorizontalScrollIndicator={false}
                 initialScrollIndex={lightboxIndex ?? 0}
                 getItemLayout={(_, index) => ({
@@ -809,19 +816,16 @@ export default function PlantDetailScreen() {
                 })}
                 keyExtractor={(p) => p.id}
                 renderItem={({ item }) => (
-                  <Pressable
+                  <ZoomablePhoto
+                    path={item.urls.cover}
+                    width={winW}
+                    height={winH}
+                    resetSignal={zoomResetSignal}
+                    onZoomChange={setLightboxZoomed}
                     onLongPress={() =>
                       showPhotoMenu(item, item.id === plant.coverPhoto?.id)
                     }
-                    delayLongPress={400}
-                    style={{ width: winW, height: winH, alignItems: "center", justifyContent: "center" }}
-                  >
-                    <AuthImage
-                      path={item.urls.cover}
-                      style={{ width: winW, height: winH }}
-                      resizeMode="contain"
-                    />
-                  </Pressable>
+                  />
                 )}
                 onMomentumScrollEnd={(e) => {
                   const idx = Math.round(e.nativeEvent.contentOffset.x / winW);
