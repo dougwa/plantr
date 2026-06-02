@@ -1279,6 +1279,20 @@ type EditOverlayProps = {
   onTapDelete: () => void;
 };
 
+// react-native-maps captures each Marker's child view into a native bitmap.
+// With tracksViewChanges=false from mount, that snapshot is taken before the
+// Ionicon glyph has painted, so the chip renders blank until the map redraws
+// (e.g. on a pan). Track for a brief window so the first snapshot includes the
+// painted content, then stop tracking to avoid the per-frame cost.
+function useMarkerInitialTracking(): boolean {
+  const [tracking, setTracking] = useState(true);
+  useEffect(() => {
+    const id = setTimeout(() => setTracking(false), 150);
+    return () => clearTimeout(id);
+  }, []);
+  return tracking;
+}
+
 function EditOverlay({
   shape,
   iconOffsetM,
@@ -1299,6 +1313,7 @@ function EditOverlay({
   const nameAt = localToLatLng(shape, halfW + iconOffsetM, 0);
   const colorAt = localToLatLng(shape, -halfW - iconOffsetM, 0);
   const deleteAt = localToLatLng(shape, 0, -halfH - iconOffsetM);
+  const tracksChanges = useMarkerInitialTracking();
 
   const center: LatLng = { latitude: shape.centerLat, longitude: shape.centerLng };
   return (
@@ -1315,7 +1330,7 @@ function EditOverlay({
         coordinate={rotateAt}
         anchor={{ x: 0.5, y: 0.5 }}
         draggable
-        tracksViewChanges={false}
+        tracksViewChanges={tracksChanges}
         onDrag={onRotateDrag}
         onDragEnd={onRotateEnd}
       >
@@ -1329,7 +1344,7 @@ function EditOverlay({
       <Marker
         coordinate={nameAt}
         anchor={{ x: 0.5, y: 0.5 }}
-        tracksViewChanges={false}
+        tracksViewChanges={tracksChanges}
         onPress={onTapName}
       >
         <View style={styles.hitLarge}>
@@ -1342,7 +1357,7 @@ function EditOverlay({
       <Marker
         coordinate={colorAt}
         anchor={{ x: 0.5, y: 0.5 }}
-        tracksViewChanges={false}
+        tracksViewChanges={tracksChanges}
         onPress={onTapColor}
       >
         <View style={styles.hitLarge}>
@@ -1355,7 +1370,7 @@ function EditOverlay({
       <Marker
         coordinate={deleteAt}
         anchor={{ x: 0.5, y: 0.5 }}
-        tracksViewChanges={false}
+        tracksViewChanges={tracksChanges}
         onPress={onTapDelete}
       >
         <View style={styles.hitLarge}>
@@ -1497,7 +1512,7 @@ function ShapeBodyEditor({
               key="handle-move"
               coordinate={coord}
               anchor={{ x: 0.5, y: 0.5 }}
-              zIndex={1}
+              zIndex={2}
               draggable
               tracksViewChanges={false}
               onDragStart={handleDragStart}
@@ -1505,8 +1520,9 @@ function ShapeBodyEditor({
               onDragEnd={() => handleDragEnd(0, 0)}
             >
               <View style={styles.handleHit}>
-                <View style={styles.moveTargetRing} />
-                <View style={styles.moveTargetDot} />
+                <View style={styles.moveTargetRing}>
+                  <View style={styles.moveTargetDot} />
+                </View>
               </View>
             </Marker>
           );
@@ -1573,7 +1589,7 @@ function PolygonBodyEditor({
         key="polygon-move"
         coordinate={{ latitude: shape.centerLat, longitude: shape.centerLng }}
         anchor={{ x: 0.5, y: 0.5 }}
-        zIndex={1}
+        zIndex={2}
         draggable
         tracksViewChanges={false}
         onDrag={(e) =>
@@ -1670,6 +1686,7 @@ function PolygonEditOverlay({
   const addAt = offsetFromBbox(iconOffsetM * 1.5, halfH + iconOffsetM);
   const removeAt = offsetFromBbox(-iconOffsetM * 1.5, halfH + iconOffsetM);
   const canRemove = (shape.polygonPoints?.length ?? 0) > 3;
+  const tracksChanges = useMarkerInitialTracking();
 
   return (
     <>
@@ -1681,7 +1698,7 @@ function PolygonEditOverlay({
         onVertexDragEnd={onVertexDragEnd}
       />
 
-      <Marker coordinate={addAt} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false} onPress={onAddPoint}>
+      <Marker coordinate={addAt} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={tracksChanges} onPress={onAddPoint}>
         <View style={styles.hitLarge}>
           <View style={styles.actionChip}>
             <Ionicons name="add" size={20} color="#171717" />
@@ -1689,7 +1706,7 @@ function PolygonEditOverlay({
         </View>
       </Marker>
 
-      <Marker coordinate={removeAt} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false} onPress={canRemove ? onRemovePoint : undefined}>
+      <Marker coordinate={removeAt} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={tracksChanges} onPress={canRemove ? onRemovePoint : undefined}>
         <View style={styles.hitLarge}>
           <View style={[styles.actionChip, !canRemove && styles.actionChipDisabled]}>
             <Ionicons name="remove" size={20} color={canRemove ? "#171717" : "#a3a3a3"} />
@@ -1697,7 +1714,7 @@ function PolygonEditOverlay({
         </View>
       </Marker>
 
-      <Marker coordinate={nameAt} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false} onPress={onTapName}>
+      <Marker coordinate={nameAt} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={tracksChanges} onPress={onTapName}>
         <View style={styles.hitLarge}>
           <View style={styles.actionChip}>
             <Ionicons name="text-outline" size={18} color="#171717" />
@@ -1705,7 +1722,7 @@ function PolygonEditOverlay({
         </View>
       </Marker>
 
-      <Marker coordinate={colorAt} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false} onPress={onTapColor}>
+      <Marker coordinate={colorAt} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={tracksChanges} onPress={onTapColor}>
         <View style={styles.hitLarge}>
           <View style={[styles.actionChip, { backgroundColor: shape.color }]}>
             <Ionicons name="color-palette-outline" size={18} color="#fff" />
@@ -1713,7 +1730,7 @@ function PolygonEditOverlay({
         </View>
       </Marker>
 
-      <Marker coordinate={deleteAt} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false} onPress={onTapDelete}>
+      <Marker coordinate={deleteAt} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={tracksChanges} onPress={onTapDelete}>
         <View style={styles.hitLarge}>
           <View style={[styles.actionChip, styles.actionChipDanger]}>
             <Ionicons name="trash-outline" size={18} color="#fff" />
@@ -1941,13 +1958,14 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
   },
   moveTargetRing: {
-    position: "absolute",
     width: 28,
     height: 28,
     borderRadius: 14,
     borderWidth: 2,
     borderColor: "#171717",
-    backgroundColor: "rgba(255,255,255,0.6)",
+    backgroundColor: "#fff",
+    alignItems: "center",
+    justifyContent: "center",
   },
   moveTargetDot: {
     width: 6,
